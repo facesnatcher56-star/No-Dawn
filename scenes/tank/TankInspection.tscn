@@ -1,0 +1,49 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/tank/TankInspection.gd" id="1_insp"]
+[ext_resource type="PackedScene" path="res://scenes/tank/A47_Mastodon_Player.tscn" id="2_player"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_tank"]
+sky_top_color = Color(0.22, 0.28, 0.35, 1)
+sky_horizon_color = Color(0.45, 0.52, 0.58, 1)
+ground_bottom_color = Color(0.12, 0.14, 0.16, 1)
+ground_horizon_color = Color(0.25, 0.28, 0.32, 1)
+
+[sub_resource type="Sky" id="Sky_tank"]
+sky_material = SubResource("ProceduralSkyMaterial_tank")
+
+[sub_resource type="Environment" id="Environment_tank"]
+background_mode = 2
+sky = SubResource("Sky_tank")
+ambient_light_source = 3
+ambient_light_color = Color(0.6, 0.65, 0.72, 1)
+ambient_light_energy = 0.6
+tonemap_mode = 2
+glow_enabled = true
+glow_bloom = 0.1
+
+[node name="TankInspection" type="Node3D"]
+script = ExtResource("1_insp")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_tank")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.819152, -0.40558, 0.40558, 0, 0.707107, 0.707107, -0.573576, -0.579228, 0.579228, 0, 15, 0)
+light_color = Color(0.98, 0.96, 0.92, 1)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="FillLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.707107, 0.353553, -0.612372, 0, 0.866025, 0.5, 0.707107, 0.353553, -0.612372, 0, 10, 0)
+light_color = Color(0.65, 0.75, 0.9, 1)
+light_energy = 0.5
+
+[node name="CameraPivot" type="Node3D" parent="."]
+
+[node name="Camera3D" type="Camera3D" parent="CameraPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4, 9.5)
+current = true
+fov = 48.0
+
+[node name="A47_Mastodon" parent="." instance=ExtResource("2_player")]

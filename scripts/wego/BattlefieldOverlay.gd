@@ -23,12 +23,12 @@ func _tag(at: Vector2, words: String, tint: Color) -> void:
 	for line in lines: width = maxf(width, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x)
 	var extent = Vector2(width + 18, lines.size() * 19 + 10)
 	var origin = at - Vector2(extent.x / 2, 0)
-	origin.x = clampf(origin.x, size.x * 0.26 + 6, maxf(size.x * 0.26 + 6, size.x * 0.72 - extent.x - 6))
-	origin.y = clampf(origin.y, 158, maxf(158, size.y * 0.83 - extent.y))
+	origin.x = clampf(origin.x, 14, maxf(14, size.x - extent.x - 14))
+	origin.y = clampf(origin.y, 45, maxf(45, size.y - extent.y - 45))
 	var initial = origin
 	for shift in [0, 1, -1, 2, -2, 3]:
 		var candidate = initial + Vector2(0, shift * (extent.y + 10))
-		candidate.y = clampf(candidate.y, 158, maxf(158, size.y * 0.83 - extent.y - 5))
+		candidate.y = clampf(candidate.y, 45, maxf(45, size.y - extent.y - 45))
 		var rect = Rect2(candidate, extent)
 		if not label_rects.any(func(other): return other.grow(4).intersects(rect)):
 			origin = candidate
@@ -40,8 +40,8 @@ func _tag(at: Vector2, words: String, tint: Color) -> void:
 
 func _box_style(tint: Color) -> StyleBoxFlat:
 	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.03, 0.055, 0.07, 0.94)
-	style.border_color = Color(tint, 0.6)
+	style.bg_color = Color(0.03, 0.055, 0.07, 0.85)
+	style.border_color = Color(tint, 0.5)
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(4)
 	return style
@@ -51,7 +51,6 @@ func _draw() -> void:
 	if game == null or not is_instance_valid(game.player): return
 	var tank = screen(game.player.position + Vector3.UP)
 	label_rects.append(Rect2(tank - Vector2(19, 19), Vector2(38, 38)))
-	# Label the actual player, and show which way its hull faces.
 	draw_arc(tank, 16, 0, TAU, 40, BLUE, 2, true)
 	var forward = screen(game.player.position - game.player.global_basis.z * 8 + Vector3.UP)
 	draw_line(tank, forward, BLUE, 2, true)
@@ -60,14 +59,13 @@ func _draw() -> void:
 	var gun_forward = screen(game.player.position - game.player.turret.global_basis.z * 13 + Vector3.UP)
 	draw_line(tank, gun_forward, Color("b4edb2"), 3, true)
 	draw_circle(gun_forward, 3, Color("b4edb2"))
-	draw_string(font, gun_forward + Vector2(4, -4), "TURRET", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("b4edb2"))
-	draw_string(font, forward + Vector2(4, 12), "HULL", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, BLUE)
-	var activity = "YOUR TANK"
 	if game.phase == "EXECUTION" and game.active_tank == game.player:
-		if game.player.speed > 0.1: activity += " • MOVING"
-		elif game.travel_target != null: activity += " • TURNING / WAITING"
-		elif game.player.shot_pending: activity += " • AIMING / LOADING"
-	_tag(tank + Vector2(0, 24), activity, BLUE)
+		var activity = ""
+		if game.player.speed > 0.1: activity = "MOVING"
+		elif game.travel_target != null: activity = "TURNING"
+		elif game.player.shot_pending: activity = "FIRING"
+		if not activity.is_empty():
+			_tag(tank + Vector2(0, 24), activity, BLUE)
 	var contact: Dictionary = game.display_contact
 	if not contact.is_empty():
 		var center: Vector3 = game.contact_visual_position
@@ -88,7 +86,7 @@ func _draw() -> void:
 		draw_string(font, middle + Vector2(-4, 5), "!" if confirmed else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, tint)
 		var top = middle.y
 		for point in ring: top = minf(top, point.y)
-		_tag(Vector2(middle.x, top - 58), "CONTACT A • " + ("ENEMY SIGHTED" if confirmed else ("LAST SEEN" if contact.source == "Visual silhouette" else "POSSIBLE ENEMY")) + "\n" + ("Visual confirmation" if confirmed else "Dashed area = uncertain location"), tint)
+		_tag(Vector2(middle.x, top - 24), "CONTACT A" + (" • SIGHTED" if confirmed else ""), tint)
 	if game.travel_target != null:
 		var destination = screen(game.travel_target + Vector3.UP * 0.4)
 		label_rects.append(Rect2(destination - Vector2(14, 14), Vector2(28, 28)))
@@ -96,7 +94,7 @@ func _draw() -> void:
 		draw_arc(destination, 10, 0, TAU, 32, BLUE, 2, true)
 		draw_line(destination + Vector2(-6, 0), destination + Vector2(6, 0), BLUE, 2)
 		draw_line(destination + Vector2(0, -6), destination + Vector2(0, 6), BLUE, 2)
-		_tag(destination + Vector2(0, 20), "MOVE HERE • %.0f m\n%s" % [game.player.position.distance_to(game.travel_target), "Moving / turning" if game.phase == "EXECUTION" else "Queued for EXECUTE"], BLUE)
+		_tag(destination + Vector2(0, 16), "%.0f m" % game.player.position.distance_to(game.travel_target), BLUE)
 	if game.aim_selected or game.fields.fire.button_pressed:
 		var point: Vector3 = game._planned_aim()
 		var aim = screen(Vector3(point.x, 0.5, point.z))
@@ -113,7 +111,8 @@ func _draw() -> void:
 			var angle = TAU * i / 48.0
 			ellipse.append(screen(Vector3(point.x, 0.5, point.z) + Vector3(cos(angle) * spread, 0, sin(angle) * spread)))
 		draw_polyline(ellipse, tint, 1, true)
-		_tag(aim + Vector2(0, 25), "YOUR AIM POINT • FIRED" if fired else ("FIRE HERE • SHOT QUEUED" if firing else "WATCH THIS POINT"), tint)
+		if firing:
+			_tag(aim + Vector2(0, 20), "FIRE TARGET", tint)
 	for event in game.shot_events:
 		var focused: bool = not game.playback.active.is_empty() and game.playback.active.shot_id == event.id
 		if game.shot_clock > event.until and not focused: continue

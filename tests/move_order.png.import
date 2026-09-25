@@ -17,6 +17,7 @@ dest_files=["res://.godot/imported/move_order.png-8a73bbb8ca519ac119e2185adecb83
 
 compress/mode=0
 compress/high_quality=false
+compress/high_quality_mode=0
 compress/lossy_quality=0.7
 compress/uastc_level=0
 compress/rdo_quality_loss=0.0

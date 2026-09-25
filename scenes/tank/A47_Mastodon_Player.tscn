@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" uid="uid://dbqy2rc04euvy" path="res://assets/models/tank/A47_Mastodon.glb" id="1_mesh"]
+[ext_resource type="Script" path="res://scripts/tank/A47_Mastodon_Vehicle.gd" id="2_ctrl"]
+
+[node name="A47_Mastodon" instance=ExtResource("1_mesh")]
+script = ExtResource("2_ctrl")

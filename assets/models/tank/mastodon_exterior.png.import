@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c4ma5ormpsuxf"
-path="res://.godot/imported/engagement.png-2b676364bc9a30a5542399194f865b83.ctex"
+uid="uid://dhf0oa4fmrqwy"
+path="res://.godot/imported/mastodon_exterior.png-5dab8237602bb2fd3915dc2661ed5995.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://tests/engagement.png"
-dest_files=["res://.godot/imported/engagement.png-2b676364bc9a30a5542399194f865b83.ctex"]
+source_file="res://assets/models/tank/mastodon_exterior.png"
+dest_files=["res://.godot/imported/mastodon_exterior.png-5dab8237602bb2fd3915dc2661ed5995.ctex"]
 
 [params]
 

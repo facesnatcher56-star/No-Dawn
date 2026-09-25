@@ -1,0 +1,76 @@
+"""
+A-47 Mastodon Heavy Cruiser - Technical Specification & Layout Data
+Alternate-History WWII Heavy Cruiser Tank (approx 1943-1948)
+"""
+
+SPEC = {
+    "dimensions": {
+        "hull_length": 7.0,
+        "hull_width": 3.4,
+        "hull_height": 1.95,
+        "total_length_with_gun": 9.05,
+        "total_height": 2.85,
+        "ground_clearance": 0.45,
+        "turret_ring_diameter": 2.15,
+        "turret_ring_center": (0.0, 0.25, 1.95),  # Blender XYZ: X=right, Y=fwd, Z=up
+    },
+    "armor_sections": [
+        {"name": "ARM_UpperGlacis", "thickness_mm": 90, "slope_deg": 55, "material": "RHA", "zone": "hull_front_upper"},
+        {"name": "ARM_LowerGlacis", "thickness_mm": 75, "slope_deg": 45, "material": "RHA", "zone": "hull_front_lower"},
+        {"name": "ARM_HullLeftUpper", "thickness_mm": 70, "slope_deg": 15, "material": "RHA", "zone": "hull_side_left_upper"},
+        {"name": "ARM_HullLeftLower", "thickness_mm": 60, "slope_deg": 0, "material": "RHA", "zone": "hull_side_left_lower"},
+        {"name": "ARM_HullRightUpper", "thickness_mm": 70, "slope_deg": 15, "material": "RHA", "zone": "hull_side_right_upper"},
+        {"name": "ARM_HullRightLower", "thickness_mm": 60, "slope_deg": 0, "material": "RHA", "zone": "hull_side_right_lower"},
+        {"name": "ARM_HullRear", "thickness_mm": 55, "slope_deg": 20, "material": "RHA", "zone": "hull_rear"},
+        {"name": "ARM_HullRoof", "thickness_mm": 30, "slope_deg": 0, "material": "RHA", "zone": "hull_roof"},
+        {"name": "ARM_HullFloor", "thickness_mm": 25, "slope_deg": 0, "material": "RHA", "zone": "hull_floor"},
+        {"name": "ARM_TurretFront", "thickness_mm": 110, "slope_deg": 25, "material": "CastArmor", "zone": "turret_front"},
+        {"name": "ARM_GunMantlet", "thickness_mm": 120, "slope_deg": 30, "material": "CastArmor", "zone": "gun_mantlet"},
+        {"name": "ARM_TurretLeft", "thickness_mm": 75, "slope_deg": 20, "material": "RHA", "zone": "turret_left"},
+        {"name": "ARM_TurretRight", "thickness_mm": 75, "slope_deg": 20, "material": "RHA", "zone": "turret_right"},
+        {"name": "ARM_TurretRear", "thickness_mm": 65, "slope_deg": 10, "material": "RHA", "zone": "turret_rear"},
+        {"name": "ARM_TurretRoof", "thickness_mm": 30, "slope_deg": 0, "material": "RHA", "zone": "turret_roof"},
+        {"name": "ARM_CommanderCupola", "thickness_mm": 80, "slope_deg": 0, "material": "CastArmor", "zone": "cupola"},
+    ],
+    "components": [
+        {"name": "CMP_Transmission", "type": "mechanical", "system": "powertrain", "hp": 400},
+        {"name": "CMP_LeftFinalDrive", "type": "mechanical", "system": "powertrain", "hp": 250},
+        {"name": "CMP_RightFinalDrive", "type": "mechanical", "system": "powertrain", "hp": 250},
+        {"name": "CMP_Driveshaft", "type": "mechanical", "system": "powertrain", "hp": 200},
+        {"name": "CMP_Engine", "type": "mechanical", "system": "engine", "hp": 650},
+        {"name": "CMP_Firewall", "type": "structural", "system": "compartment", "hp": 300},
+        {"name": "CMP_RadiatorLeft", "type": "cooling", "system": "engine", "hp": 120},
+        {"name": "CMP_RadiatorRight", "type": "cooling", "system": "engine", "hp": 120},
+        {"name": "CMP_EngineFan_L", "type": "cooling", "system": "engine", "hp": 80},
+        {"name": "CMP_EngineFan_R", "type": "cooling", "system": "engine", "hp": 80},
+        {"name": "CMP_LeftFuelTank", "type": "fuel", "system": "fuel", "hp": 150, "capacity_liters": 420},
+        {"name": "CMP_RightFuelTank", "type": "fuel", "system": "fuel", "hp": 150, "capacity_liters": 420},
+        {"name": "CMP_TurretRing", "type": "mechanical", "system": "traverse", "hp": 350},
+        {"name": "CMP_TurretDrive", "type": "mechanical", "system": "traverse", "hp": 180},
+        {"name": "CMP_MainGunBreech", "type": "armament", "system": "gun", "hp": 450},
+        {"name": "CMP_MainGunRecoilLeft", "type": "armament", "system": "gun", "hp": 150},
+        {"name": "CMP_MainGunRecoilRight", "type": "armament", "system": "gun", "hp": 150},
+        {"name": "CMP_GunRecuperator", "type": "armament", "system": "gun", "hp": 150},
+        {"name": "CMP_Radio", "type": "electrical", "system": "radio", "hp": 90},
+        {"name": "CMP_Intercom", "type": "electrical", "system": "radio", "hp": 60},
+        {"name": "CMP_BatteryBank", "type": "electrical", "system": "electrical", "hp": 110},
+    ],
+    "ammunition_racks": [
+        {"name": "AMMO_ReadyRack", "location": "turret_bustle", "capacity": 12, "parent": "Turret"},
+        {"name": "AMMO_HullRack_Left", "location": "hull_sponson_left", "capacity": 24, "parent": "Hull"},
+        {"name": "AMMO_HullRack_Right", "location": "hull_sponson_right", "capacity": 18, "parent": "Hull"},
+        {"name": "AMMO_FloorRack", "location": "hull_floor", "capacity": 16, "parent": "Hull"},
+    ],
+    "crew": [
+        {"name": "CREW_Driver", "role": "Driver", "location": "front_left", "parent": "Hull"},
+        {"name": "CREW_RadioOperator", "role": "Radio Operator", "location": "front_right", "parent": "Hull"},
+        {"name": "CREW_Gunner", "role": "Gunner", "location": "turret_right_front", "parent": "Turret"},
+        {"name": "CREW_Commander", "role": "Commander", "location": "turret_right_rear", "parent": "Turret"},
+        {"name": "CREW_Loader", "role": "Loader", "location": "turret_left", "parent": "Turret"},
+    ],
+    "hatches": [
+        {"name": "HATCH_Commander", "pivot_name": "CommanderHatchPivot", "parent": "Turret"},
+        {"name": "HATCH_Loader", "pivot_name": "LoaderHatchPivot", "parent": "Turret"},
+        {"name": "HATCH_Driver", "pivot_name": "DriverHatchPivot", "parent": "Hull"},
+    ]
+}

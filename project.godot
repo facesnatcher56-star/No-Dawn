@@ -25,6 +25,7 @@ SoundEventManager="*res://scripts/autoload/SoundEventManager.gd"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
+window/size/mode="maximized"
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
