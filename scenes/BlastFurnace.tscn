@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://dt19x2m4kp7a0"]
+
+[ext_resource type="Script" path="res://scripts/environment/BlastFurnace.gd" id="1_furnace"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_furn"]
+height = 36.0
+radius = 14.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_BrickF"]
+albedo_color = Color(0.3, 0.15, 0.12, 1)
+roughness = 0.9
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_furn"]
+material = SubResource("Mat_BrickF")
+top_radius = 11.0
+bottom_radius = 15.0
+height = 36.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_Lava"]
+albedo_color = Color(1, 0.5, 0.1, 1)
+emission_enabled = true
+emission = Color(1, 0.45, 0.1, 1)
+emission_energy_multiplier = 4.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_trough"]
+material = SubResource("Mat_Lava")
+size = Vector3(8, 1, 24)
+
+[node name="BlastFurnace" type="Node3D"]
+script = ExtResource("1_furnace")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 18, 0)
+shape = SubResource("CylinderShape3D_furn")
+
+[node name="FurnaceMesh" type="MeshInstance3D" parent="StaticBody3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 18, 0)
+mesh = SubResource("CylinderMesh_furn")
+
+[node name="FurnaceLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 14)
+light_color = Color(1, 0.42, 0.08, 1)
+light_energy = 6.5
+shadow_enabled = true
+omni_range = 55.0
+
+[node name="TroughMesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 20)
+mesh = SubResource("BoxMesh_trough")

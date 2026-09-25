@@ -1,0 +1,9 @@
+[gd_scene format=3 uid="uid://cscr01"]
+
+[ext_resource type="PackedScene" path="res://scenes/Main.tscn" id="1_main"]
+[ext_resource type="Script" path="res://scripts/take_screenshot.gd" id="2_scr"]
+
+[node name="Main" instance=ExtResource("1_main")]
+
+[node name="ScreenShot" type="Node" parent="." index="12"]
+script = ExtResource("2_scr")
