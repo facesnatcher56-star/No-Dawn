@@ -79,9 +79,7 @@ func step(delta: float) -> void:
 	muzzle_flash.visible = flash > 0.42
 	model.step(delta, orders.get("extinguish", false))
 	lamp.visible = elapsed <= 2 and orders.get("light", false) and model.functional("Searchlight") and not model.catastrophic
-	var desired_yaw = gun_goal_yaw() - rotation.y
-	model.turret_yaw = rotate_toward(model.turret_yaw, desired_yaw, delta * 0.5)
-	turret.rotation.y = model.turret_yaw
+	var world_turret_yaw = rotation.y + model.turret_yaw
 	speed = 0
 	if engine_on and model.can_move():
 		var pivot = clampf(remaining_pivot, -delta * 0.3, delta * 0.3)
@@ -103,6 +101,10 @@ func step(delta: float) -> void:
 		speed = travelled / delta
 	else:
 		velocity = Vector3.ZERO
+
+	# Traverse in world space so a hull pivot does not drag the gun off bearing.
+	model.turret_yaw = rotate_toward(world_turret_yaw, gun_goal_yaw(), delta * 0.5) - rotation.y
+	turret.rotation.y = model.turret_yaw
 
 func gun_goal_yaw() -> float:
 	if orders.has("aim_point"):

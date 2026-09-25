@@ -57,8 +57,13 @@ func _draw() -> void:
 	draw_line(tank, forward, BLUE, 2, true)
 	var arrow = (forward - tank).normalized()
 	draw_colored_polygon(PackedVector2Array([forward + arrow * 5, forward - arrow.rotated(0.6) * 8, forward - arrow.rotated(-0.6) * 8]), BLUE)
+	var gun_forward = screen(game.player.position - game.player.turret.global_basis.z * 13 + Vector3.UP)
+	draw_line(tank, gun_forward, Color("b4edb2"), 3, true)
+	draw_circle(gun_forward, 3, Color("b4edb2"))
+	draw_string(font, gun_forward + Vector2(4, -4), "TURRET", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("b4edb2"))
+	draw_string(font, forward + Vector2(4, 12), "HULL", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, BLUE)
 	var activity = "YOUR TANK"
-	if game.phase == "EXECUTION":
+	if game.phase == "EXECUTION" and game.active_tank == game.player:
 		if game.player.speed > 0.1: activity += " • MOVING"
 		elif game.travel_target != null: activity += " • TURNING / WAITING"
 		elif game.player.shot_pending: activity += " • AIMING / LOADING"

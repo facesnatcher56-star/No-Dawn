@@ -6,4 +6,6 @@ static func finish_turn(game) -> bool:
 		if game.phase != "EXECUTION": return true
 		await game.get_tree().physics_frame
 		game._physics_process(0.1)
+		if not game.playback.active.is_empty() and game.playback.replay_time >= game.Playback.IMPACT_DURATION:
+			game._continue_impact()
 	return false

@@ -3,12 +3,15 @@ const Vehicle = preload("res://scripts/wego/TacticalVehicle.gd")
 const Viewer = preload("res://scripts/wego/ShotViewer.gd")
 const Overlay = preload("res://scripts/wego/BattlefieldOverlay.gd")
 const Playback = preload("res://scripts/wego/CombatPlayback.gd")
+const Actions = preload("res://scripts/wego/ActionQueue.gd")
+const Damage = preload("res://scripts/wego/DamageReport.gd")
 const Armor = preload("res://scripts/wego/ArmorModel.gd")
 var player
 var enemy
 var camera: Camera3D
 var phase = "PLANNING"
 var turn = 1
+var active_tank
 var time_left = 5.0
 var sim_time = 0.0
 var sense_timer = 0.0
@@ -70,6 +73,21 @@ var log_lines: Array[String] = []
 var zoom = 150.0
 var ammo_choice: OptionButton
 var loadout_locked = false
+var action_queue = Actions.new()
+var queue_scroll: ScrollContainer
+var queue_rows: VBoxContainer
+var queue_widgets: Array[Dictionary] = []
+var budget_label: Label
+var reload_label: Label
+var aim_button: Button
+var hull_button: Button
+var stop_button: Button
+var wait_button: Button
+var reload_button: Button
+var next_action_limit: SpinBox
+var impact_systems: Label
+var impact_continue: Button
+var using_queue = false
 
 func _ready() -> void:
 	rng.seed = 94217
@@ -209,12 +227,45 @@ func _build_ui() -> void:
 	movement_button.toggle_mode = true
 	fire_button.toggle_mode = true
 	movement_button.tooltip_text = "Click MOVE, then click clear ground. The tank turns and drives there during execution."
-	fire_button.tooltip_text = "Click AIM & FIRE, then click a point on the battlefield. One shot is queued for execution."
+	fire_button.tooltip_text = "Append an aim-and-fire action. The hull stays still during this action."
+	var orientation = HBoxContainer.new()
+	left.add_child(orientation)
+	aim_button = _button(orientation, "AIM TURRET", func(): _set_mode("aim"), 34)
+	hull_button = _button(orientation, "TURN HULL", func(): _set_mode("hull"), 34)
+	aim_button.tooltip_text = "Click a point to turn only the turret. Does not fire or move the hull."
+	aim_button.toggle_mode = true
+	hull_button.toggle_mode = true
+	hull_button.tooltip_text = "Click a direction to pivot the hull, holding the gun's world bearing."
+	var utility = HBoxContainer.new()
+	left.add_child(utility)
+	reload_button = _button(utility, "RELOAD", func(): _append_action("reload", player.position), 32)
+	wait_button = _button(utility, "WAIT 1s", func(): _append_action("wait", player.position, 1.0), 32)
 	scan_button = _button(left, "SCAN FOR ENEMY", _queue_scan)
 	scan_button.tooltip_text = "Stop and watch the enemy estimate, switch the engine off, and shine the searchlight for two seconds. This can expose you."
-	_label(left, "2  REVIEW YOUR ORDERS", 13)
+	_label(left, "2  QUEUE · limit 0 = until done", 13)
+	budget_label = _label(left, "", 14)
+	reload_label = _label(left, "", 13)
+	queue_scroll = ScrollContainer.new()
+	queue_scroll.custom_minimum_size.y = 126
+	queue_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	left.add_child(queue_scroll)
+	queue_rows = VBoxContainer.new()
+	queue_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	queue_scroll.add_child(queue_rows)
+	var limit_row = HBoxContainer.new()
+	left.add_child(limit_row)
+	var limit_caption = _label(limit_row, "Next action limit / s", 12)
+	limit_caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	next_action_limit = SpinBox.new()
+	next_action_limit.min_value = 0
+	next_action_limit.max_value = 5
+	next_action_limit.step = 0.25
+	next_action_limit.tooltip_text = "0 = until finished. Set a limit to move briefly, then perform another action."
+	limit_row.add_child(next_action_limit)
+	controls.append(next_action_limit)
+	_label(left, "0 = until done · × cancels an action", 12)
 	order_summary = _label(left, "", 14)
-	order_summary.custom_minimum_size.y = 90
+	order_summary.custom_minimum_size.y = 35
 	execute_button = _button(left, "EXECUTE ORDERS  ▶", _execute, 48)
 	var execute_style = StyleBoxFlat.new()
 	execute_style.bg_color = Color("285e55")
@@ -225,11 +276,16 @@ func _build_ui() -> void:
 	execution_progress.show_percentage = false
 	execution_progress.custom_minimum_size.y = 7
 	left.add_child(execution_progress)
-	_label(left, "5 simulated seconds per turn.\nPlayback starts at half speed.", 13)
-	cancel_button = _button(left, "CLEAR ORDERS", _clear_orders, 30)
+	_label(left, "5 seconds per side · your tank acts first", 12)
+	var edits = HBoxContainer.new()
+	left.add_child(edits)
+	stop_button = _button(edits, "STOP / EDIT", _stop_and_edit, 32)
+	controls.erase(stop_button)
+	cancel_button = _button(edits, "CLEAR ALL", _clear_orders, 32)
+	left.move_child(edits, 2)
 	var advanced = VBoxContainer.new()
 	var advanced_toggle = _button(left, "Advanced orders  ▸", func(): advanced.visible = not advanced.visible, 30)
-	advanced_toggle.tooltip_text = "Optional manual bearing, range, engine and crew controls."
+	advanced_toggle.tooltip_text = "Manual movement and firing are used when the action queue is empty. Aim height and creep are captured when adding an action."
 	left.add_child(advanced)
 	advanced.visible = false
 	_spin(advanced, "Travel / m", "move", -15, 35, 0)
@@ -290,11 +346,11 @@ func _build_ui() -> void:
 	turn_box.add_child(turn_shot_buttons)
 	turn_box.move_child(turn_shot_buttons, 1)
 	_label(help_box, "WATCH THE ACTION", 18)
-	_label(help_box, "Execution starts at half speed. Gunfire slows automatically. Armor impacts pause the battlefield for a 6.5-second cutaway. Pause / Resume works during both action and replay. Impacts play one at a time; Continue skips to the next.", 14)
+	_label(help_box, "Execution starts at half speed. Gunfire slows automatically. Armor impacts pause the battlefield for a cutaway, then hold a damage report until you press Continue. Pause / Resume works during both action and replay. Impacts play one at a time. Continue first reveals the result, then returns to battle.", 14)
 	_label(help_box, "YOUR FIRST TURN", 18)
-	_label(help_box, "1. Press SCAN FOR ENEMY.\n2. Press EXECUTE ORDERS.\n3. Watch the 5-second action, then read the new report.", 15)
+	_label(help_box, "1. Press SCAN FOR ENEMY.\n2. Press EXECUTE ORDERS.\n3. Watch your action, then the enemy response, then read the new report.", 15)
 	_label(help_box, "HOW TO MOVE", 18)
-	_label(help_box, "Press MOVE, then click clear ground. A blue path shows your destination. Press EXECUTE to turn and drive. Long moves continue over later turns.", 14)
+	_label(help_box, "Add actions in order: MOVE, TURN HULL, AIM TURRET, FIRE, SCAN, RELOAD or WAIT. Use a time limit for a short move followed by a shot. Estimates show what fits in your five seconds. STOP / EDIT pauses your turn; × cancels an action. EXECUTE resumes the remaining time. Unfinished actions carry over.", 14)
 	_label(help_box, "HOW TO FIRE", 18)
 	_label(help_box, "Press AIM & FIRE, then click a target point. Or press FIRE AT THIS ESTIMATE above. A red crosshair marks the queued shot. Press EXECUTE to fire once the gun is ready and aimed.", 14)
 	_label(help_box, "WHAT THE MARKERS MEAN", 18)
@@ -325,49 +381,193 @@ func _build_ui() -> void:
 		if phase not in ["EXECUTION", "COMPLETE"]:
 			if player.model.reassign(person.selected, station.get_item_text(station.selected)): _log("Crew transfer started; advances during execution.")
 			else: _log("Transfer unavailable: destination occupied, crew unfit, or transfer already underway."))
-	var hint_box = _panel(root, 0.26, 0, 0.72, 0.205)
+	var hint_box = _panel(root, 0.26, 0, 0.72, 0.225)
 	action_hint = _label(hint_box, "", 15)
 	var playback_row = HBoxContainer.new()
 	hint_box.add_child(playback_row)
-	pause_button = _button(playback_row, "PAUSE ACTION", _toggle_playback_pause, 28)
+	execute_button.reparent(playback_row)
+	execute_button.add_theme_font_size_override("font_size", 13)
+	execution_progress.reparent(hint_box)
+	pause_button = _button(playback_row, "PAUSE", _toggle_playback_pause, 28)
+	pause_button.add_theme_font_size_override("font_size", 13)
 	controls.erase(pause_button)
 	speed_choice = OptionButton.new()
-	for caption in ["¼ speed", "½ speed (default)", "1× speed"]: speed_choice.add_item(caption)
+	for caption in ["¼ speed", "½ speed", "1× speed"]: speed_choice.add_item(caption)
 	speed_choice.select(1)
 	speed_choice.item_selected.connect(func(index): playback.speed = [0.25, 0.5, 1.0][index])
 	playback_row.add_child(speed_choice)
-	var impact_box = _panel(root, 0.27, 0.22, 0.72, 0.83)
+	var impact_box = _panel(root, 0.27, 0.22, 0.99, 0.98)
 	impact_panel = impact_box.get_parent().get_parent()
+	var impact_style = impact_panel.get_theme_stylebox("panel").duplicate()
+	impact_style.bg_color = Color("0d181f")
+	impact_panel.add_theme_stylebox_override("panel", impact_style)
+	# Keep acknowledgement controls visible even for a long crew/system report.
+	var impact_scroll = impact_box.get_parent()
+	var impact_frame = VBoxContainer.new()
+	impact_panel.remove_child(impact_scroll)
+	impact_panel.add_child(impact_frame)
+	impact_frame.add_child(impact_scroll)
+	impact_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	impact_title = _label(impact_box, "", 19)
+	var impact_columns = HBoxContainer.new()
+	impact_columns.add_theme_constant_override("separation", 18)
+	impact_box.add_child(impact_columns)
+	var animation_column = VBoxContainer.new()
+	animation_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	impact_columns.add_child(animation_column)
 	impact_viewer = Viewer.new()
-	impact_viewer.custom_minimum_size = Vector2(280, 220)
-	impact_box.add_child(impact_viewer)
-	impact_stage = _label(impact_box, "", 15)
-	impact_effects = _label(impact_box, "", 13)
+	impact_viewer.custom_minimum_size = Vector2(280, 260)
+	animation_column.add_child(impact_viewer)
+	impact_systems = _label(animation_column, "", 14)
+	var damage_column = VBoxContainer.new()
+	damage_column.custom_minimum_size.x = 270
+	damage_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	impact_columns.add_child(damage_column)
+	_label(damage_column, "DAMAGE ASSESSMENT", 18)
+	impact_stage = _label(damage_column, "", 15)
+	impact_effects = _label(damage_column, "", 14)
 	impact_effects.custom_minimum_size.y = 35
 	impact_progress = ProgressBar.new()
 	impact_progress.max_value = Playback.IMPACT_DURATION
 	impact_progress.show_percentage = false
 	impact_progress.custom_minimum_size.y = 6
-	impact_box.add_child(impact_progress)
+	impact_frame.add_child(impact_progress)
 	var replay_buttons = HBoxContainer.new()
-	impact_box.add_child(replay_buttons)
+	impact_frame.add_child(replay_buttons)
 	var retry = _button(replay_buttons, "REPLAY THIS SHOT", func(): playback.restart_replay(), 30)
-	var next = _button(replay_buttons, "CONTINUE  ▶", _skip_impact, 30)
+	impact_continue = _button(replay_buttons, "SHOW DAMAGE  ▶", _continue_impact, 36)
 	controls.erase(retry)
-	controls.erase(next)
+	controls.erase(impact_continue)
 	impact_panel.visible = false
 	var footer = _panel(root, 0, 0.83, 0.72, 1)
 	_label(footer, "ACTION TIMELINE • blue = your shots / red = enemy shots", 12)
 	event_log = _label(footer, "", 14)
 
+func _can_edit_orders() -> bool:
+	return phase not in ["EXECUTION", "COMPLETE"] or (phase == "EXECUTION" and active_tank == player and time_left > 0.0001 and playback.paused and not playback.busy())
+
+func _set_order_controls(enabled: bool) -> void:
+	for control in controls:
+		if control is SpinBox: control.editable = enabled
+		elif control is BaseButton: control.disabled = not enabled
+	for row in queue_widgets:
+		row.cancel.disabled = not enabled
+		row.limit.editable = enabled
+
+func _stop_and_edit() -> void:
+	if phase != "EXECUTION" or active_tank != player or playback.busy() or time_left <= 0.0001: return
+	playback.paused = true
+	playback.accumulator = 0.0
+	_world_playback_rate(0)
+	_set_order_controls(true)
+	order_notice = "Turn paused. Cancel the current action with ×, add orders, then RESUME."
+
+func _append_action(kind: String, point: Vector3, limit_override: float = -1) -> void:
+	if not _can_edit_orders(): return
+	action_queue.append(kind, point, next_action_limit.value if limit_override < 0 else limit_override, fields.creep.button_pressed)
+	using_queue = true
+	_sync_queue_markers()
+	_rebuild_queue()
+	order_notice = Actions.TITLES[kind] + " added. Review its time estimate in the queue."
+
+func _cancel_action(index: int) -> void:
+	if not _can_edit_orders() or index < 0 or index >= action_queue.actions.size(): return
+	var title: String = Actions.TITLES[action_queue.actions[index].kind]
+	action_queue.actions.remove_at(index)
+	if index == 0:
+		action_queue.running = false
+		if phase == "EXECUTION": player.commit(Actions.hold_plan(player))
+	_sync_queue_markers()
+	_rebuild_queue()
+	order_notice = title + " cancelled. Spent time and fired shells are unchanged."
+
+func _sync_queue_markers() -> void:
+	travel_target = null
+	fields.fire.button_pressed = false
+	fields.light.button_pressed = false
+	for action in action_queue.actions:
+		if action.kind == "move" and travel_target == null: travel_target = action.point
+		if action.kind == "fire": fields.fire.button_pressed = true
+		if action.kind == "scan": fields.light.button_pressed = true
+		if action.kind in ["fire", "aim", "scan"]:
+			_aim_at(Vector3(action.point.x, 0, action.point.z))
+			break
+
+func _rebuild_queue() -> void:
+	if queue_rows == null: return
+	for child in queue_rows.get_children():
+		queue_rows.remove_child(child)
+		child.queue_free()
+	queue_widgets.clear()
+	queue_scroll.visible = not action_queue.actions.is_empty()
+	for i in range(action_queue.actions.size()):
+		var action = action_queue.actions[i]
+		var row = HBoxContainer.new()
+		queue_rows.add_child(row)
+		var label = _label(row, "", 13)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var limit = SpinBox.new()
+		limit.min_value = 0
+		limit.max_value = maxf(5, action.spent)
+		limit.step = 0.25
+		limit.value = action.limit
+		limit.custom_minimum_size.x = 68
+		limit.tooltip_text = "Action time limit in seconds, including time already spent. 0 = until done."
+		row.add_child(limit)
+		limit.value_changed.connect(func(value):
+			if _can_edit_orders(): action.limit = value)
+		var cancel = Button.new()
+		cancel.text = "×"
+		cancel.tooltip_text = "Cancel this action"
+		cancel.custom_minimum_size = Vector2(28, 32)
+		row.add_child(cancel)
+		cancel.pressed.connect(func(): _cancel_action(i))
+		queue_widgets.append({"label": label, "limit": limit, "cancel": cancel})
+	_refresh_queue()
+
+func _refresh_queue() -> void:
+	if budget_label == null: return
+	queue_scroll.visible = not action_queue.actions.is_empty()
+	var budget = time_left if phase == "EXECUTION" and active_tank == player else 5.0
+	var estimates = action_queue.estimates(player)
+	var total: float = estimates.back().end if not estimates.is_empty() else 0.0
+	var committed = minf(total, budget)
+	budget_label.text = "%.2f s remaining · ~%.2f s queued" % [budget, committed]
+	if phase == "EXECUTION" and active_tank == enemy: budget_label.text = "ENEMY TURN · your next budget: 5.00 s"
+	elif total > budget: budget_label.text += "\nQueue extends beyond this turn"
+	else: budget_label.text += "\n%.2f s free" % maxf(0, budget - committed)
+	var reload_time = Actions.reload_seconds(player)
+	reload_label.text = "GUN READY · %d rounds" % player.model.rounds if reload_time <= 0 else "RELOAD · %.2f s remaining · %d rounds" % [reload_time, player.model.rounds]
+	if not player.model.can_fire(): reload_label.text = "GUN UNAVAILABLE · check CREW"
+	if reload_time > 0 and player.orders.get("extinguish", false): reload_label.text += "\nPaused while loader fights fire"
+	elif reload_time > 0 and phase == "EXECUTION" and active_tank == enemy: reload_label.text += " · waits for your turn"
+	for i in range(mini(estimates.size(), queue_widgets.size())):
+		var estimate = estimates[i]
+		var row = queue_widgets[i]
+		var timing = "~%.2f s" % estimate.seconds if is_finite(estimate.seconds) else "blocked"
+		var caption = "%d  %s · %s" % [i + 1, estimate.title, timing]
+		if not estimate.reason.is_empty(): caption += "\n" + estimate.reason
+		elif estimate.start >= budget: caption += "\nNext turn"
+		elif estimate.end > budget: caption += "\nContinues next turn"
+		elif i == 0 and action_queue.running: caption += "\nActive · %.2f s spent" % action_queue.actions[0].spent
+		row.label.text = caption
+		row.label.add_theme_color_override("font_color", Color("efc477") if estimate.end > budget else Color("8cddf0"))
+		row.cancel.disabled = not _can_edit_orders()
+		row.limit.editable = _can_edit_orders()
+	stop_button.disabled = phase != "EXECUTION" or active_tank != player or playback.busy() or time_left <= 0.0001
+	stop_button.text = "EDITING · PAUSED" if _can_edit_orders() and phase == "EXECUTION" else "STOP / EDIT"
+
 func _set_mode(mode: String) -> void:
-	if phase in ["EXECUTION", "COMPLETE"]: return
+	if not _can_edit_orders(): return
 	input_mode = mode
 	order_notice = ""
 
 func _clear_orders() -> void:
-	if phase in ["EXECUTION", "COMPLETE"]: return
+	if not _can_edit_orders(): return
+	action_queue.actions.clear()
+	action_queue.running = false
+	if phase == "EXECUTION": player.commit(Actions.hold_plan(player))
+	_rebuild_queue()
 	travel_target = null
 	aim_target = null
 	aim_selected = false
@@ -380,29 +580,30 @@ func _clear_orders() -> void:
 	order_notice = "Orders cleared. Tank will hold position."
 
 func _queue_scan() -> void:
-	if phase in ["EXECUTION", "COMPLETE"] or display_contact.is_empty(): return
-	_clear_orders()
+	if not _can_edit_orders() or display_contact.is_empty(): return
 	_aim_at(display_contact.position)
 	fields.engine.button_pressed = false
 	fields.observe.button_pressed = true
 	fields.light.button_pressed = true
 	order_notice = "Scan queued: listen and use the searchlight for 2 seconds."
-	_log("SCAN queued. Press EXECUTE to search the marked area. The light can reveal your position.")
+	_append_action("scan", _planned_aim())
+	_log("SCAN appended. The light can reveal your position.")
 
 func _queue_contact_fire() -> void:
-	if phase in ["EXECUTION", "COMPLETE"] or display_contact.is_empty(): return
+	if not _can_edit_orders() or display_contact.is_empty(): return
 	_queue_fire(display_contact.position)
 
 func _queue_fire(point: Vector3) -> void:
-	if phase in ["EXECUTION", "COMPLETE"]: return
+	if not _can_edit_orders(): return
 	_aim_at(point)
 	fields.fire.button_pressed = true
 	input_mode = "select"
 	order_notice = "One shot queued. Press EXECUTE to aim and fire."
-	_log("FIRE queued at %.0f m. Press EXECUTE. A shot at an uncertain estimate can miss." % player.position.distance_to(point))
+	_append_action("fire", _planned_aim())
+	_log("FIRE appended. A shot at an uncertain estimate can miss.")
 
 func _queue_move(point: Vector3) -> void:
-	if phase in ["EXECUTION", "COMPLETE"]: return
+	if not _can_edit_orders(): return
 	point.y = player.position.y
 	if not player.model.can_move():
 		order_notice = "Cannot move: driver, engine or transmission unavailable. Check CREW."
@@ -414,7 +615,11 @@ func _queue_move(point: Vector3) -> void:
 	var query = PhysicsShapeQueryParameters3D.new()
 	query.shape = player.get_node("CollisionShape3D").shape
 	query.transform = player.global_transform * player.get_node("CollisionShape3D").transform
-	query.motion = point - player.position
+	var route_start: Vector3 = player.position
+	for action in action_queue.actions:
+		if action.kind == "move" and action.limit == 0: route_start = action.point
+	query.transform.origin += route_start - player.position
+	query.motion = point - route_start
 	query.collision_mask = 1
 	query.margin = 0.1
 	var fractions = get_world_3d().direct_space_state.cast_motion(query)
@@ -428,7 +633,8 @@ func _queue_move(point: Vector3) -> void:
 	fields.engine.button_pressed = true
 	input_mode = "select"
 	order_notice = "Move queued. Press EXECUTE to turn and drive along the blue path."
-	_log("MOVE queued: %.0f m. Long moves continue when you execute later turns." % point.distance_to(player.position))
+	_append_action("move", point)
+	_log("MOVE appended. Set a time limit to stop early for another action.")
 
 func _planned_aim() -> Vector3:
 	if aim_target != null: return Vector3(aim_target.x, fields.height.value, aim_target.z)
@@ -445,6 +651,12 @@ func _aim_at(point: Vector3) -> void:
 	updating_fields = false
 
 func _execute() -> void:
+	if phase == "EXECUTION":
+		if _can_edit_orders():
+			playback.paused = false
+			order_notice = ""
+			_set_order_controls(false)
+		return
 	if phase in ["EXECUTION", "COMPLETE"] or player.model.catastrophic or playback.busy(): return
 	if not loadout_locked:
 		player.model.set_loadout(25 if ammo_choice.selected == 0 else 40)
@@ -461,16 +673,22 @@ func _execute() -> void:
 	playback.accumulator = 0.0
 	playback.paused = false
 	playback.shot_focus = 0.0
-	player.commit(plan)
+	active_tank = player
+	using_queue = not action_queue.actions.is_empty()
+	action_queue.running = false
+	if using_queue:
+		player.orders["extinguish"] = plan.extinguish
+		action_queue.start(player)
+	else: player.commit(plan)
 	input_mode = "select"
 	order_notice = ""
-	# AI commits using its own last observation, before either tank moves.
+	# AI plans from its own last observation; orders wait for its action.
 	var believed: Vector3 = enemy.contact.get("position", enemy.position + Vector3(-70, 0, 0))
 	var offset = believed - enemy.position
 	enemy.commit({"move": 0.0 if turn % 3 != 0 else -8.0, "pivot": 0.0, "bearing": fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360), "range": offset.length(), "height": 1.45, "fire": turn > 1, "engine": true, "observe": true, "light": turn % 4 == 0, "extinguish": enemy.model.burning})
 	_set_map_running(true)
 	phase = "EXECUTION"
-	_event("Orders committed. Both tanks act simultaneously.")
+	_event("YOUR TURN: execute orders, then the enemy responds.")
 	if plan.has("destination"): _event("YOU: move %.0f m toward the marked destination." % player.position.distance_to(plan.destination))
 	if plan.light: _event("YOU: scan with searchlight for the first 2 simulated seconds.")
 	time_left = 5
@@ -488,12 +706,12 @@ func _physics_process(delta: float) -> void:
 		viewer.seek(playback.replay_time)
 		_refresh_impact()
 		_world_playback_rate(0)
-		if playback.replay_time >= Playback.IMPACT_DURATION: _skip_impact()
+		# Hold the completed damage assessment until explicitly acknowledged.
 		return
 	if not playback.pending.is_empty():
 		_begin_impact()
 		return
-	if time_left <= 0.0001:
+	if time_left <= 0.0001 and shells.is_empty():
 		_finish_execution()
 		return
 	if not shells.is_empty(): playback.shot_focus = maxf(playback.shot_focus, 0.1)
@@ -504,20 +722,28 @@ func _physics_process(delta: float) -> void:
 		if playback.busy():
 			_begin_impact()
 			break
-		if time_left <= 0.0001:
+		if time_left <= 0.0001 and shells.is_empty():
 			_finish_execution()
 			break
 
 func _simulation_step(delta: float) -> void:
-	var dt = minf(delta, time_left)
+	var acting = time_left > 0.0001
+	var dt = minf(delta, time_left) if acting else delta
 	sim_time += dt
 	time_left = maxf(0, time_left - dt)
 	for node in map_scripts: node.call("_process", dt)
-	player.step(dt)
-	enemy.step(dt)
-	# Both readiness decisions are made before resolving this tick's projectile impacts.
-	for tank in [player, enemy]:
-		if tank.ready_to_shoot(): _fire(tank)
+	# Only the active crew advances orders and reloads. Resolve late shells
+	# before handing control to the other tank.
+	if acting:
+		if active_tank == player and using_queue: action_queue.start(player)
+		active_tank.step(dt)
+		if active_tank.ready_to_shoot(): _fire(active_tank)
+		if active_tank == player and using_queue:
+			var completed = action_queue.advance(player, dt)
+			if not completed.is_empty():
+				_event("YOU: " + completed)
+				_sync_queue_markers()
+				_rebuild_queue()
 	_step_shells(dt)
 	sense_timer += dt
 	if sense_timer >= 0.5:
@@ -525,8 +751,24 @@ func _simulation_step(delta: float) -> void:
 		_sense(player, enemy)
 		_sense(enemy, player)
 
+func _engagement_over() -> bool:
+	for tank in [player, enemy]:
+		if tank.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"]: return true
+	return false
+
 func _finish_execution() -> void:
-	if phase != "EXECUTION" or playback.busy(): return
+	if phase != "EXECUTION" or playback.busy() or not shells.is_empty(): return
+	if active_tank == player and not _engagement_over():
+		player.lamp.visible = false
+		player.muzzle_flash.visible = false
+		player.flash = 0
+		action_queue.running = false
+		active_tank = enemy
+		time_left = 5.0
+		playback.accumulator = 0.0
+		playback.shot_focus = 0.0
+		_event("ENEMY TURN: Contact A executes its orders.")
+		return
 	_set_map_running(false)
 	phase = "ASSESSMENT"
 	turn += 1
@@ -543,18 +785,21 @@ func _finish_execution() -> void:
 	updating_fields = false
 	if travel_target != null and player.position.distance_to(travel_target) < 0.7: travel_target = null
 	phase_report = "Turn complete. Review the report, then choose your next orders."
-	if player.shot_pending:
+	if player.shot_pending and not using_queue:
 		phase_report = "Gun did not fire: " + _fire_status() + ". Queue a shot again next turn."
 		_log(phase_report)
-	elif fields.fire.button_pressed:
+	elif fields.fire.button_pressed and not using_queue:
 		phase_report = "Shot fired. Inspect SHOT for armor hits, or read the crew report for misses."
 	if travel_target != null:
 		phase_report += " Move still queued; EXECUTE continues it."
 	fields.fire.button_pressed = false
+	if using_queue:
+		_sync_queue_markers()
+		if not action_queue.actions.is_empty(): phase_report += " Unfinished actions remain in the queue."
 	_publish_contact()
 	if player.orders.get("light", false) and not player.orders.get("fire", false):
 		phase_report = "Enemy spotted. FIRE AT THIS ESTIMATE queues a shot at its last seen position." if display_contact.get("source", "") == "Visual silhouette" else "No visual contact. Try another scan or move to improve your view."
-	_log("Assessment: your tank %s. Unfinished reloads, transfers and projectiles carry into the next execution." % player.model.status())
+	_log("Assessment: your tank %s. Unfinished reloads and transfers continue on each tank’s next action." % player.model.status())
 	if enemy.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"]:
 		_log("Engagement complete: enemy %s. Restart to try another engagement." % enemy.model.status())
 		phase = "COMPLETE"
@@ -582,6 +827,7 @@ func _toggle_playback_pause() -> void:
 	if phase != "EXECUTION": return
 	playback.paused = not playback.paused
 	_world_playback_rate(playback.rate())
+	_set_order_controls(_can_edit_orders())
 
 func _begin_impact() -> void:
 	var record = playback.start_next()
@@ -589,21 +835,42 @@ func _begin_impact() -> void:
 	_show_record(record, true)
 	impact_viewer.show_record(record, true)
 	impact_panel.visible = true
+	impact_panel.get_parent().move_child(impact_panel, -1)
+	_set_order_controls(false)
 	impact_title.text = _shot_title(record)
 	impact_title.add_theme_color_override("font_color", Color("8cddf0") if record.shooter == "Your tank" else Color("ff9b86"))
 	_world_playback_rate(0)
 	_refresh_impact()
 
+func _continue_impact() -> void:
+	if playback.active.is_empty(): return
+	if playback.replay_time < Playback.IMPACT_DURATION:
+		playback.replay_time = Playback.IMPACT_DURATION
+		impact_viewer.seek(Viewer.DURATION)
+		viewer.seek(Viewer.DURATION)
+		_refresh_impact()
+	else:
+		_skip_impact()
+
 func _refresh_impact() -> void:
 	impact_stage.text = impact_viewer.stage_text()
 	impact_progress.value = playback.replay_time
+	var damage: Dictionary = playback.active.get("damage", {})
 	var reached: Array[String] = impact_viewer.reached_volumes
+	impact_continue.text = "CONTINUE  ▶" if playback.replay_time >= Playback.IMPACT_DURATION else "SHOW FULL REPORT  ▶"
+	impact_systems.text = "Battlefield paused. No turn time is spent during this review."
 	if playback.replay_time < 2.5:
-		impact_effects.text = "Battlefield paused • impact %d of %d queued" % [1, 1 + playback.pending.size()]
-	elif reached.is_empty():
-		impact_effects.text = "No internal components struck." if playback.replay_time >= 4.8 else "Following the recorded projectile paths…"
+		impact_effects.text = "Watching the shell strike the armor…"
+	elif playback.replay_time < 4.8:
+		var entries: Array[String] = []
+		for change in damage.get("changes", []):
+			if reached.has(change.name): entries.append(change.name.to_upper() + " · " + change.state + "\n" + change.effect)
+		impact_effects.text = "\n\n".join(entries) if not entries.is_empty() else "Following the projectile and fragments…"
 	else:
-		impact_effects.text = "STRUCK: " + ", ".join(reached)
+		impact_effects.text = Damage.text(damage)
+		impact_systems.text = "TARGET STATUS · " + damage.get("status", "Unknown") + "\n\n" + "\n".join(damage.get("capabilities", []))
+		if playback.replay_time >= Playback.IMPACT_DURATION:
+			impact_stage.text = playback.active.result + "\nReview at your pace · Continue when ready"
 
 func _skip_impact() -> void:
 	if playback.active.is_empty(): return
@@ -612,8 +879,9 @@ func _skip_impact() -> void:
 	viewer.playing = false
 	playback.finish_replay()
 	impact_panel.visible = false
+	_set_order_controls(_can_edit_orders())
 	if not playback.pending.is_empty(): _begin_impact()
-	elif time_left <= 0.0001: _finish_execution()
+	elif time_left <= 0.0001 and shells.is_empty(): _finish_execution()
 
 func _shot_title(record: Dictionary) -> String:
 	return "SHOT #%02d • %s → %s" % [record.get("shot_id", 0), "YOU" if record.get("shooter", "") == "Your tank" else "CONTACT A", "YOUR TANK" if record.target == "Your tank" else "CONTACT A"]
@@ -654,6 +922,7 @@ func _dispersion(tank) -> float:
 	return angle
 
 func _fire(tank) -> void:
+	if phase != "EXECUTION" or tank != active_tank or not tank.ready_to_shoot(): return
 	var origin: Vector3 = tank.position + Vector3(0, 2.65, 0)
 	var bearing = deg_to_rad(tank.orders.bearing)
 	var range_m: float = tank.orders.range
@@ -786,8 +1055,8 @@ func _sense(observer, target, gun_report = false) -> void:
 	if observer.history.is_empty() or here.distance_to(observer.history.back().position) > 8:
 		observer.history.append({"position": here, "direction": direction, "time": sim_time})
 		if observer.history.size() > 12: observer.history.pop_front()
-	# A noisy sound does not overwrite a recent precise visual fix.
-	if not observer.contact.is_empty() and observer.contact.source == "Visual silhouette" and sim_time - observer.contact.time < 8 and not gun_report: return
+	# Preserve a precise sighting through the ten-second player/enemy round.
+	if not observer.contact.is_empty() and observer.contact.source == "Visual silhouette" and sim_time - observer.contact.time < 13 and not gun_report: return
 	var updated = {"position": Vector3(estimated.x, 0, estimated.y), "uncertainty": uncertainty, "time": sim_time, "source": source, "bearing": rad_to_deg(measured), "arc": arc}
 	if not observer.contact.is_empty() and not gun_report:
 		var previous: Dictionary = observer.contact
@@ -821,6 +1090,7 @@ func _fire_status() -> String:
 	return "gun ready"
 
 func _refresh_orders() -> void:
+	_refresh_queue()
 	var lines: Array[String] = []
 	if travel_target != null:
 		var distance = player.position.distance_to(travel_target)
@@ -844,33 +1114,42 @@ func _refresh_orders() -> void:
 	else: lines.append("No shot queued")
 	if fields.extinguish.button_pressed: lines.append("Loader fights fire")
 	order_summary.text = "\n".join(lines)
+	if using_queue:
+		order_summary.text = "Actions run from top to bottom. Estimates include turning, aiming and reload."
+		if action_queue.actions.is_empty(): order_summary.text = "Queue empty. Hold position and reload, or add an action."
 	movement_button.set_pressed_no_signal(input_mode == "move")
 	fire_button.set_pressed_no_signal(input_mode == "fire")
+	aim_button.set_pressed_no_signal(input_mode == "aim")
+	hull_button.set_pressed_no_signal(input_mode == "hull")
 	execution_progress.value = 5 - time_left if phase == "EXECUTION" else 0
 	if phase == "EXECUTION":
 		if not playback.active.is_empty():
 			action_hint.text = "IMPACT REPLAY • BATTLEFIELD PAUSED\n" + _shot_title(playback.active)
 		elif playback.paused:
-			action_hint.text = "ACTION PAUSED\nPress RESUME to continue. Your orders are still locked."
+			action_hint.text = "YOUR TURN PAUSED · %.2f s left\nEdit the queue, then RESUME." % time_left if active_tank == player else "ENEMY TURN PAUSED\nPress RESUME to continue."
+			if active_tank == player and input_mode != "select": action_hint.text = "PAUSED · %.2f s left\n%s: click a point to append an action." % [time_left, input_mode.to_upper()]
 		elif playback.shot_focus > 0:
 			var firing: Array[String] = []
 			for event in shot_events:
 				if shot_clock - event.fired < 2: firing.append("YOU" if event.shooter == "Your tank" else "CONTACT A")
 			action_hint.text = "SHOT SLOW-MOTION • 8% SPEED\n" + " + ".join(firing) + " FIRED — watch the colored trails."
 		else:
-			action_hint.text = "EXECUTING • %.2f / 5.00 simulated seconds\nPlayback %.2f× • both tanks act simultaneously." % [5 - time_left, playback.speed]
-		execute_button.text = "WATCHING  •  %.1f sim s left" % time_left
+			action_hint.text = "%s • %.2f / 5.00 simulated seconds\nPlayback %.2f×" % ["YOUR TURN" if active_tank == player else "ENEMY TURN", 5 - time_left, playback.speed]
+		execute_button.text = "RESUME  ▶  %.2f s LEFT" % time_left if _can_edit_orders() else "WATCHING  •  %.1f sim s left" % time_left
+		execute_button.disabled = not _can_edit_orders()
 	elif phase == "COMPLETE":
 		action_hint.text = phase_report
 		execute_button.text = "ENGAGEMENT COMPLETE"
 	elif input_mode == "move":
 		action_hint.text = order_notice if not order_notice.is_empty() else "MOVE: CLICK CLEAR GROUND\nThen press EXECUTE to turn and drive."
+	elif input_mode in ["aim", "hull"]:
+		action_hint.text = ("AIM TURRET" if input_mode == "aim" else "TURN HULL") + ": CLICK A DIRECTION\nAppends an action; the other orientation stays independent."
 	elif input_mode == "fire":
 		action_hint.text = "FIRE: CLICK A TARGET POINT\nThen press EXECUTE to aim and fire."
 	else:
 		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLAN YOUR TURN\nMove or aim with a click, then press EXECUTE.")
 	if phase not in ["EXECUTION", "COMPLETE"]:
-		execute_button.text = "EXECUTE ORDERS  ▶" if travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 else "EXECUTE / WAIT 5 SECONDS"
+		execute_button.text = "EXECUTE ORDERS  ▶" if travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty() else "EXECUTE / WAIT 5 SECONDS"
 		movement_button.disabled = not player.model.can_move()
 		fire_button.disabled = not player.model.can_fire()
 		contact_fire_button.disabled = not player.model.can_fire() or display_contact.is_empty()
@@ -882,7 +1161,7 @@ func _process(delta: float) -> void:
 	camera.size = zoom
 	camera.position = player.position + Vector3(37, 90, 65)
 	camera.look_at(player.position + Vector3(37, 0, 0))
-	status_label.text = "TURN %02d • %s\n%s • %d rounds" % [turn, ("IMPACT REPLAY" if not playback.active.is_empty() else ("ACTING" if phase == "EXECUTION" and not playback.paused else "PAUSED")), player.model.status(), player.model.rounds]
+	status_label.text = "TURN %02d • %s\n%s • %d rounds" % [turn, ("IMPACT REPLAY" if not playback.active.is_empty() else (("YOUR TURN" if active_tank == player else "ENEMY TURN") if phase == "EXECUTION" and not playback.paused else "PAUSED")), player.model.status(), player.model.rounds]
 	crew_label.text = player.station_report()
 	var contact = display_contact
 	if not contact.is_empty():
@@ -902,7 +1181,7 @@ func _process(delta: float) -> void:
 	_refresh_orders()
 	selected_record.disabled = phase == "EXECUTION"
 	pause_button.disabled = phase != "EXECUTION"
-	pause_button.text = "RESUME ▶" if playback.paused else ("PAUSE REPLAY" if not playback.active.is_empty() else "PAUSE ACTION")
+	pause_button.text = "RESUME ▶" if playback.paused else "PAUSE"
 
 func _show_record(record: Dictionary, driven = false) -> void:
 	detail_tabs.current_tab = 1
@@ -916,6 +1195,8 @@ func _show_record(record: Dictionary, driven = false) -> void:
 		if impact.has("residual_speed"): text_value += "\nResidual projectile: %.0f m/s" % impact.residual_speed
 	for effect in record.effects: text_value += "\n" + effect
 	if record.effects.is_empty(): text_value += "\nNo internal component or crew effects."
+	if record.has("damage"):
+		text_value += "\n\nDAMAGE ASSESSMENT\n" + Damage.text(record.damage) + "\n\n" + "\n".join(record.damage.capabilities)
 	report.text = text_value
 
 func _log(message: String) -> void:
@@ -930,14 +1211,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP: zoom = maxf(35, zoom - 8)
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN: zoom = minf(200, zoom + 8)
-		if event.button_index == MOUSE_BUTTON_RIGHT and phase not in ["EXECUTION", "COMPLETE"]:
+		if event.button_index == MOUSE_BUTTON_RIGHT and _can_edit_orders():
 			input_mode = "select"
-			order_notice = "Target selection cancelled. Use CLEAR ORDERS to remove queued orders."
-		if event.button_index == MOUSE_BUTTON_LEFT and phase not in ["EXECUTION", "COMPLETE"]:
+			order_notice = "Target selection cancelled. Use CLEAR ALL to remove queued orders."
+		if event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
 			var ray = camera.project_ray_origin(event.position)
 			var direction = camera.project_ray_normal(event.position)
 			var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
 			if hit != null:
 				if input_mode == "move": _queue_move(hit)
 				elif input_mode == "fire": _queue_fire(hit)
+				elif input_mode in ["aim", "hull"]:
+					var kind = input_mode
+					if kind == "aim": _aim_at(hit)
+					_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
+					input_mode = "select"
 				else: order_notice = "Choose MOVE or AIM & FIRE first, then click a point in the yard."

@@ -1,6 +1,7 @@
 extends RefCounted
 ## All distances are metres, armor is mm RHA, energy is joules.
 ## Deliberately approximate energy/armor relation, not historical ammunition data.
+const Damage = preload("res://scripts/wego/DamageReport.gd")
 const MASS = 6.8
 const MUZZLE_SPEED = 740.0
 var plates: Array = []
@@ -148,6 +149,7 @@ func rack_filled(label: String) -> bool:
 	return rack_counts.get(label, 0) > 0
 
 func resolve(origin: Vector3, direction: Vector3, speed: float, seed_value: int) -> Dictionary:
+	var before = Damage.snapshot(self)
 	var rng = RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var result = {"paths": [], "effects": [], "strikes": [], "impacts": [], "volumes": [], "speed": speed, "result": "MISS", "seed": seed_value}
@@ -155,6 +157,7 @@ func resolve(origin: Vector3, direction: Vector3, speed: float, seed_value: int)
 		result.volumes.append({"name": v.name, "pose": pose(v), "size": v.size, "armor": v.has("mm"), "crew": v.get("crew", false)})
 	var energy = 0.5 * MASS * speed * speed
 	_trace(origin, direction.normalized(), energy, false, result, rng)
+	result.damage = Damage.summarize(before, Damage.snapshot(self))
 	return result
 
 func _trace(origin: Vector3, dir: Vector3, energy: float, fragment: bool, result: Dictionary, rng: RandomNumberGenerator) -> void:
