@@ -81,6 +81,7 @@ var pulse_mode_label: Label
 var sop_contact_choice: OptionButton
 var sop_fired_choice: OptionButton
 var sop_fire_auth_choice: OptionButton
+var last_player_doctrine_notice: String = ""
 
 var status_label: Label
 var contact_label: Label
@@ -519,38 +520,41 @@ func _build_ui() -> void:
 	_label(advanced, "CREW DOCTRINE (SOP)", 13)
 	_label(advanced, "On Contact:", 11)
 	sop_contact_choice = OptionButton.new()
-	sop_contact_choice.add_item("Halt & Track Target")
-	sop_contact_choice.add_item("Continue & Track")
-	sop_contact_choice.add_item("Reverse to Cover")
-	sop_contact_choice.add_item("Hold Current Orders")
-	sop_contact_choice.add_item("Remain Concealed")
+	sop_contact_choice.add_item("Continue & Track", CrewDoctrine.ContactReaction.CONTINUE_AND_TRACK)
+	sop_contact_choice.add_item("Halt & Track Target", CrewDoctrine.ContactReaction.HALT_AND_TRACK)
+	sop_contact_choice.add_item("Reverse to Cover", CrewDoctrine.ContactReaction.REVERSE_COVER)
+	sop_contact_choice.add_item("Hold Current Orders", CrewDoctrine.ContactReaction.HOLD_ORDERS)
+	sop_contact_choice.add_item("Remain Concealed", CrewDoctrine.ContactReaction.REMAIN_CONCEALED)
 	sop_contact_choice.item_selected.connect(func(idx):
 		if player != null and player.doctrine != null:
-			player.doctrine.on_contact = idx as CrewDoctrine.ContactReaction)
+			player.doctrine.on_contact = sop_contact_choice.get_item_id(idx) as CrewDoctrine.ContactReaction)
+	sop_contact_choice.select(sop_contact_choice.get_item_index(player.doctrine.on_contact))
 	advanced.add_child(sop_contact_choice)
 	controls.append(sop_contact_choice)
 	
 	_label(advanced, "When Fired Upon:", 11)
 	sop_fired_choice = OptionButton.new()
-	sop_fired_choice.add_item("Halt Immediately")
-	sop_fired_choice.add_item("Reverse Away")
-	sop_fired_choice.add_item("Seek Cover")
-	sop_fired_choice.add_item("Continue Orders")
+	sop_fired_choice.add_item("Halt Immediately", CrewDoctrine.FiredUponReaction.HALT)
+	sop_fired_choice.add_item("Reverse Away", CrewDoctrine.FiredUponReaction.REVERSE)
+	sop_fired_choice.add_item("Seek Cover", CrewDoctrine.FiredUponReaction.SEEK_COVER)
+	sop_fired_choice.add_item("Continue Orders", CrewDoctrine.FiredUponReaction.CONTINUE_ORDERS)
 	sop_fired_choice.item_selected.connect(func(idx):
 		if player != null and player.doctrine != null:
-			player.doctrine.on_fired_upon = idx as CrewDoctrine.FiredUponReaction)
+			player.doctrine.on_fired_upon = sop_fired_choice.get_item_id(idx) as CrewDoctrine.FiredUponReaction)
+	sop_fired_choice.select(sop_fired_choice.get_item_index(player.doctrine.on_fired_upon))
 	advanced.add_child(sop_fired_choice)
 	controls.append(sop_fired_choice)
 	
 	_label(advanced, "Fire Authority:", 11)
 	sop_fire_auth_choice = OptionButton.new()
-	sop_fire_auth_choice.add_item("Hold Fire (Player Order Only)")
-	sop_fire_auth_choice.add_item("Confirmed Hostile Only")
-	sop_fire_auth_choice.add_item("Fire When Solution Ready")
-	sop_fire_auth_choice.add_item("Return Fire When Attacked")
+	sop_fire_auth_choice.add_item("Hold Fire (Player Order Only)", CrewDoctrine.FireAuthority.HOLD_FIRE)
+	sop_fire_auth_choice.add_item("Confirmed Hostile Only", CrewDoctrine.FireAuthority.CONFIRMED_ONLY)
+	sop_fire_auth_choice.add_item("Fire When Solution Ready", CrewDoctrine.FireAuthority.FIRE_WHEN_READY)
+	sop_fire_auth_choice.add_item("Return Fire When Attacked", CrewDoctrine.FireAuthority.RETURN_FIRE)
 	sop_fire_auth_choice.item_selected.connect(func(idx):
 		if player != null and player.doctrine != null:
-			player.doctrine.fire_authority = idx as CrewDoctrine.FireAuthority)
+			player.doctrine.fire_authority = sop_fire_auth_choice.get_item_id(idx) as CrewDoctrine.FireAuthority)
+	sop_fire_auth_choice.select(sop_fire_auth_choice.get_item_index(player.doctrine.fire_authority))
 	advanced.add_child(sop_fire_auth_choice)
 	controls.append(sop_fire_auth_choice)
 	_button(left, "Restart engagement", func(): get_tree().reload_current_scene(), 26)
@@ -1026,6 +1030,7 @@ func _execute() -> void:
 	_set_map_running(true)
 	phase = "EXECUTION"
 	cam_following_player = true
+	last_player_doctrine_notice = ""
 	_event("SIMULTANEOUS EXECUTION (%s, %.0fs): Both sides acting." % ["COMBAT" if p_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER", timeline.pulse_duration])
 	if plan.has("destination"): _event("YOU: advancing toward destination.")
 	if plan.light: _event("YOU: sweeping searchlight for 2 seconds.")
@@ -1129,8 +1134,10 @@ func _simulation_step(delta: float) -> void:
 		if p_react.halt_movement: player.doctrine_halt = true
 		if p_react.reverse_movement: player.doctrine_reversing = true
 		if p_react.fire_authorized: player.doctrine_fire_authorized = true
-		if not p_react.notice.is_empty() and player.elapsed < dt * 2.0:
+		if not p_react.notice.is_empty() and p_react.notice != last_player_doctrine_notice:
+			last_player_doctrine_notice = p_react.notice
 			_event(p_react.notice)
+			_callout("Driver", p_react.notice)
 			
 		var e_react = enemy.doctrine.evaluate(
 			enemy,

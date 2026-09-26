@@ -25,7 +25,7 @@ enum FireAuthority {
 	RETURN_FIRE = 3
 }
 
-var on_contact: ContactReaction = ContactReaction.HALT_AND_TRACK
+var on_contact: ContactReaction = ContactReaction.CONTINUE_AND_TRACK
 var on_fired_upon: FiredUponReaction = FiredUponReaction.HALT
 var fire_authority: FireAuthority = FireAuthority.HOLD_FIRE
 
