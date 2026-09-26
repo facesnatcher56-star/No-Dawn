@@ -2,6 +2,18 @@ extends CharacterBody3D
 const Armor = preload("res://scripts/wego/ArmorModel.gd")
 const CrewDoctrine = preload("res://scripts/wego/CrewDoctrine.gd")
 const ContactTrack = preload("res://scripts/wego/ContactTrack.gd")
+const VehicleConfig = preload("res://scripts/wego/VehicleConfig.gd")
+const AmmunitionData = preload("res://scripts/wego/AmmunitionData.gd")
+
+var config: VehicleConfig = VehicleConfig.create_mastodon()
+var active_ammo: AmmunitionData = AmmunitionData.create_apcbc()
+
+var terrain_roughness: float = 0.0
+var yaw_rate: float = 0.0
+var acceleration: float = 0.0
+var stabilizer_damaged: bool = false
+var previous_speed: float = 0.0
+var previous_yaw: float = 0.0
 
 var model = Armor.new()
 var turret: Node3D
@@ -208,6 +220,7 @@ func step(delta: float) -> void:
 	if lamp != null:
 		lamp.visible = elapsed <= 2 and orders.get("light", false) and model.functional("Searchlight") and not model.catastrophic
 	var world_turret_yaw = rotation.y + model.turret_yaw
+	var start_yaw = rotation.y
 	speed = 0
 	if engine_on and model.can_move() and not doctrine_halt:
 		var pivot = clampf(remaining_pivot, -delta * 0.3, delta * 0.3)
@@ -235,9 +248,16 @@ func step(delta: float) -> void:
 		speed = travelled / delta
 	else:
 		velocity = Vector3.ZERO
+		speed = 0.0
 
-	# Traverse in world space so a hull pivot does not drag the gun off bearing.
-	model.turret_yaw = rotate_toward(world_turret_yaw, gun_goal_yaw(), delta * 0.5) - rotation.y
+	yaw_rate = (rotation.y - start_yaw) / maxf(0.0001, delta)
+	acceleration = (speed - previous_speed) / maxf(0.0001, delta)
+	previous_speed = speed
+	previous_yaw = rotation.y
+
+	# Traverse in world space so a hull pivot does not drag the gun off bearing (counter-rotation).
+	var trav_rate = deg_to_rad(config.turret_traverse_speed_deg) if config != null else 0.5
+	model.turret_yaw = rotate_toward(world_turret_yaw, gun_goal_yaw(), delta * trav_rate) - rotation.y
 	if turret != null:
 		turret.rotation.y = model.turret_yaw
 
@@ -270,7 +290,22 @@ func gun_goal_yaw() -> float:
 func ready_to_shoot() -> bool:
 	var target_yaw = gun_goal_yaw()
 	var can_trigger = (shot_pending or doctrine_fire_authorized)
-	return can_trigger and elapsed > 0.4 and model.reload <= 0 and model.can_fire() and absf(angle_difference(rotation.y + model.turret_yaw, target_yaw)) < 0.04
+	var loaded = model.reload <= 0 and model.can_fire()
+	var aimed = absf(angle_difference(rotation.y + model.turret_yaw, target_yaw)) < 0.04
+	if not (can_trigger and elapsed > 0.4 and loaded and aimed):
+		return false
+	# If vehicle is completely unstabilized, firing while moving at speed is prohibited by doctrine
+	if config != null and config.gun_stabilization == "NONE" and speed > 0.5:
+		return false
+	return true
+
+func get_active_ammo() -> AmmunitionData:
+	if active_ammo == null:
+		active_ammo = AmmunitionData.create_apcbc()
+	return active_ammo
+
+func set_active_ammo(ammo: AmmunitionData) -> void:
+	active_ammo = ammo
 
 func consume_round() -> void:
 	shot_pending = false

@@ -1,125 +1,193 @@
 extends RefCounted
-## Sequential orders and their estimates use the same rates as TacticalVehicle.
-const TITLES = {"move": "Move", "hull": "Turn hull", "aim": "Aim turret", "fire": "Aim & fire", "scan": "Scan", "reload": "Reload", "wait": "Wait"}
-var actions: Array[Dictionary] = []
-var running = false
+## Concurrent action timeline: coordinates Driver, Gunner, Loader, and Commander
+## across the 8-second WEGO pulse, replacing the sequential single-file queue.
 
-func append(kind: String, point: Vector3, limit: float, creep: bool = false) -> void:
-	actions.append({"kind": kind, "point": point, "limit": limit, "spent": 0.0, "creep": creep})
+const ConcurrentScheduler = preload("res://scripts/wego/ConcurrentScheduler.gd")
+const VehicleConfig = preload("res://scripts/wego/VehicleConfig.gd")
+
+const TITLES = {
+	"move": "Move",
+	"hull": "Turn hull",
+	"aim": "Aim turret",
+	"fire": "Aim & fire",
+	"scan": "Scan",
+	"reload": "Reload",
+	"wait": "Wait"
+}
+
+var actions: Array[Dictionary] = []
+var running: bool = false
+var scheduler: ConcurrentScheduler = ConcurrentScheduler.new()
+var pulse_time: float = 0.0
+
+func append(kind: String, point: Vector3, limit: float = -1.0, creep: bool = false) -> void:
+	var crew_ch = ConcurrentScheduler.get_crew_for_kind(kind)
+	var sys_ch = ConcurrentScheduler.get_subsystem_for_kind(kind)
+	actions.append({
+		"kind": kind,
+		"point": point,
+		"limit": limit,
+		"spent": 0.0,
+		"creep": creep,
+		"crew": crew_ch,
+		"system": sys_ch,
+		"active": false,
+		"completed": false
+	})
+	scheduler.actions = actions
 
 static func reload_seconds(tank) -> float:
-	return tank.model.reload * (1.0 if tank.model.occupied("Loader") else 3.8)
+	var penalty: float = 1.0 if tank.model.occupied("Loader") else 3.5
+	return tank.model.reload * penalty
 
 static func hold_plan(tank) -> Dictionary:
-	return {"move": 0.0, "pivot": 0.0, "bearing": fposmod(rad_to_deg(-(tank.rotation.y + tank.model.turret_yaw)), 360), "range": 75.0, "height": 1.4, "fire": false, "engine": tank.engine_on, "observe": true, "light": false, "extinguish": tank.orders.get("extinguish", false)}
+	return {
+		"move": 0.0,
+		"pivot": 0.0,
+		"bearing": fposmod(rad_to_deg(-(tank.rotation.y + tank.model.turret_yaw)), 360),
+		"range": 75.0,
+		"height": 1.4,
+		"fire": false,
+		"engine": tank.engine_on,
+		"observe": true,
+		"light": false,
+		"extinguish": tank.orders.get("extinguish", false)
+	}
 
+# Starts concurrent execution by compiling all currently ready actions into the tank plan
 func start(tank) -> void:
 	if actions.is_empty() or running: return
-	var action = actions[0]
-	var plan = hold_plan(tank)
-	match action.kind:
-		"move":
-			plan.destination = action.point
-			plan.engine = true
-			plan.creep = action.creep
-		"hull":
-			var offset: Vector3 = action.point - tank.position
-			plan.pivot = rad_to_deg(angle_difference(tank.rotation.y, -atan2(offset.x, -offset.z)))
-			plan.engine = true
-		"aim", "fire", "scan":
-			plan.aim_point = action.point
-			plan.fire = action.kind == "fire"
-			plan.light = action.kind == "scan"
-			if action.kind == "scan": plan.engine = false
-		"reload": plan.extinguish = false
-	tank.commit(plan)
+	scheduler.actions = actions
+	pulse_time = 0.0
 	running = true
+	_apply_active_orders(tank)
 
+func _apply_active_orders(tank) -> void:
+	var plan = hold_plan(tank)
+	
+	# Determine which actions can run concurrently right now
+	var driver_busy = false
+	var gunner_busy = false
+	var loader_busy = false
+	var commander_busy = false
+	
+	for action in actions:
+		if action.completed: continue
+		
+		# Driver channel: Move or Turn Hull
+		if action.crew == "DRIVER" and not driver_busy:
+			driver_busy = true
+			action.active = true
+			if action.kind == "move":
+				plan.destination = action.point
+				plan.engine = true
+				plan.creep = action.creep
+			elif action.kind == "hull":
+				var offset: Vector3 = action.point - tank.position
+				plan.pivot = rad_to_deg(angle_difference(tank.rotation.y, -atan2(offset.x, -offset.z)))
+				plan.engine = true
+				
+		# Gunner channel: Aim or Fire
+		elif action.crew == "GUNNER" and not gunner_busy:
+			if action.kind == "fire" and driver_busy:
+				plan.aim_point = action.point
+				plan.fire = false
+			else:
+				gunner_busy = true
+				action.active = true
+				plan.aim_point = action.point
+				plan.fire = (action.kind == "fire")
+			
+		# Loader channel: Reload
+		elif action.crew == "LOADER" and not loader_busy:
+			loader_busy = true
+			action.active = true
+			plan.extinguish = false
+			
+		# Commander channel: Scan
+		elif action.crew == "COMMANDER" and not commander_busy:
+			commander_busy = true
+			action.active = true
+			plan.light = (action.kind == "scan")
+			if action.kind == "scan":
+				plan.aim_point = action.point
+				plan.engine = false # Idle engine for quiet listening/scan if specified
+				
+		# Generic / Wait
+		elif action.kind == "wait" and not driver_busy and not gunner_busy:
+			action.active = true
+			break
+			
+	tank.commit(plan)
+
+# Advances all concurrent timelines simultaneously
 func advance(tank, delta: float) -> String:
 	if actions.is_empty() or not running: return ""
-	var action = actions[0]
-	action.spent += delta
-	var aimed = absf(angle_difference(tank.rotation.y + tank.model.turret_yaw, tank.gun_goal_yaw())) < 0.02
-	var done = false
-	match action.kind:
-		"move": done = tank.position.distance_to(action.point) < 0.1
-		"hull": done = absf(tank.remaining_pivot) < 0.001
-		"aim": done = aimed
-		"fire": done = not tank.shot_pending
-		"scan": done = aimed and action.spent >= 2.0
-		"reload": done = tank.model.reload <= 0
-		"wait": done = action.spent >= (action.limit if action.limit > 0 else 1.0)
-	var capped = action.limit > 0 and action.spent + 0.00001 >= action.limit
-	if not done and not capped: return ""
-	actions.pop_front()
-	running = false
-	tank.commit(hold_plan(tank))
-	return TITLES[action.kind] + (" complete." if done else " stopped at its time limit.")
-
-func estimates(tank) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	var position: Vector3 = tank.position
-	var hull: float = tank.rotation.y
-	var turret: float = hull + tank.model.turret_yaw
-	var reload_left = reload_seconds(tank)
-	var ready_rounds: int = tank.model.rack_counts["Ready rack"]
-	var rounds_left: int = tank.model.rounds
-	var reload_paused: bool = tank.orders.get("extinguish", false)
-	var total = 0.0
-	for i in range(actions.size()):
+	pulse_time += delta
+	
+	var completed_notices: Array[String] = []
+	var need_replan: bool = false
+	
+	for i in range(actions.size() - 1, -1, -1):
 		var action = actions[i]
-		var offset: Vector3 = action.point - position
-		var goal = -atan2(offset.x, -offset.z)
-		var duration = 0.0
-		var reason = ""
-		var destination = position
-		var next_hull = hull
-		var next_turret = turret
+		if not action.active or action.completed: continue
+		action.spent += delta
+		
+		var done: bool = false
 		match action.kind:
 			"move":
-				var turning = absf(angle_difference(hull, goal)) / 0.6
-				var driving = Vector2(offset.x, offset.z).length() / (2.0 if action.creep else 7.0)
-				duration = turning + driving
-				next_hull = goal
-				destination = action.point
-				if not tank.model.can_move(): reason = "Movement unavailable"
+				done = tank.position.distance_to(action.point) < 0.15
 			"hull":
-				duration = absf(angle_difference(hull, goal)) / 0.3
-				next_hull = goal
-				if not tank.model.can_move(): reason = "Movement unavailable"
-			"aim", "fire", "scan":
-				duration = absf(angle_difference(turret, goal)) / 0.5
-				next_turret = goal
-				if action.kind == "fire":
-					duration = maxf(duration, maxf(reload_left, maxf(0, 0.6 - (tank.elapsed if running and i == 0 else 0.0))))
-					if not tank.model.can_fire() or rounds_left <= 0: reason = "Gun or ammunition unavailable"
-					elif reload_paused and reload_left > 0: reason = "Reload paused: loader fighting fire"
-				elif action.kind == "scan": duration = maxf(duration, maxf(0, 2.0 - action.spent))
+				done = absf(tank.remaining_pivot) < 0.005
+			"aim":
+				var aimed = absf(angle_difference(tank.rotation.y + tank.model.turret_yaw, tank.gun_goal_yaw())) < 0.02
+				done = aimed
+			"fire":
+				done = not tank.shot_pending
+			"scan":
+				var aimed = absf(angle_difference(tank.rotation.y + tank.model.turret_yaw, tank.gun_goal_yaw())) < 0.02
+				done = aimed and action.spent >= 2.0
 			"reload":
-				reload_paused = false
-				duration = reload_left
-				if (not tank.model.can_fire() or rounds_left <= 0) and reload_left > 0: reason = "Reload unavailable"
-			"wait": duration = maxf(0, (action.limit if action.limit > 0 else 1.0) - action.spent)
-		var full_duration = maxf(duration, 1.0 / 60.0)
-		var capped = action.limit > 0
-		duration = minf(full_duration, maxf(0, action.limit - action.spent)) if capped else full_duration
-		if not reason.is_empty(): duration = maxf(0, action.limit - action.spent) if capped else INF
-		# Predict where a deliberately shortened move/turn will leave the tank.
-		if action.kind == "move":
-			var turning = absf(angle_difference(hull, goal)) / 0.6
-			next_hull = rotate_toward(hull, goal, duration * 0.6)
-			var travel = maxf(0, duration - turning) * (2.0 if action.creep else 7.0)
-			destination = position.move_toward(action.point, travel)
-		elif action.kind == "hull": next_hull = rotate_toward(hull, goal, duration * 0.3)
-		elif action.kind in ["aim", "fire", "scan"]: next_turret = rotate_toward(turret, goal, duration * 0.5)
-		result.append({"seconds": duration, "start": total, "end": total + duration, "reason": reason, "title": TITLES[action.kind]})
-		total += duration
-		position = destination
-		hull = next_hull
-		turret = next_turret
-		if not reload_paused: reload_left = maxf(0, reload_left - duration)
-		if action.kind == "fire" and reason.is_empty() and duration + 0.0001 >= full_duration:
-			ready_rounds = maxi(0, ready_rounds - 1)
-			rounds_left = maxi(0, rounds_left - 1)
-			reload_left = (6.5 if ready_rounds > 0 else 10.8) * (1.0 if tank.model.occupied("Loader") else 3.8)
+				done = tank.model.reload <= 0.0
+			"wait":
+				done = action.spent >= (action.limit if action.limit > 0.0 else 1.0)
+				
+		var capped: bool = action.limit > 0.0 and action.spent + 0.00001 >= action.limit
+		
+		if done or capped:
+			action.completed = true
+			action.active = false
+			need_replan = true
+			var note = TITLES[action.kind] + (" complete." if done else " stopped at time limit.")
+			completed_notices.append(note)
+			actions.remove_at(i)
+			
+	if need_replan:
+		if actions.is_empty():
+			running = false
+			tank.commit(hold_plan(tank))
+		else:
+			_apply_active_orders(tank)
+			
+	return "\n".join(completed_notices)
+
+# Generates concurrent schedule estimates
+func estimates(tank) -> Array[Dictionary]:
+	scheduler.actions = actions
+	var scheduled = scheduler.schedule_timeline(tank)
+	var result: Array[Dictionary] = []
+	for item in scheduled:
+		result.append({
+			"seconds": item.duration,
+			"start": item.start_time,
+			"end": item.end_time,
+			"reason": item.reason,
+			"title": TITLES[item.kind],
+			"crew": item.crew,
+			"system": item.system
+		})
 	return result
+
+func render_timeline(tank) -> String:
+	scheduler.actions = actions
+	return scheduler.render_ascii_timeline(tank)

@@ -16,6 +16,8 @@ const WegoTimeline = preload("res://scripts/wego/WegoTimeline.gd")
 const MASTODON_SCENE = preload("res://scenes/tank/A47_Mastodon_Player.tscn")
 const CombatEffects = preload("res://scripts/wego/CombatEffects.gd")
 const WorldPlanningGraphics = preload("res://scripts/wego/WorldPlanningGraphics.gd")
+const AmmunitionData = preload("res://scripts/wego/AmmunitionData.gd")
+const VehicleConfig = preload("res://scripts/wego/VehicleConfig.gd")
 
 var world_graphics: WorldPlanningGraphics
 var ghost_tank: A47_Mastodon_Vehicle
@@ -800,7 +802,8 @@ func _refresh_queue() -> void:
 		var estimate = estimates[i]
 		var row = queue_widgets[i]
 		var timing = "~%.2f s" % estimate.seconds if is_finite(estimate.seconds) else "blocked"
-		var caption = "%d  %s · %s" % [i + 1, estimate.title, timing]
+		var crew_tag = ("[" + estimate.crew + "] ") if estimate.has("crew") and not estimate.crew.is_empty() else ""
+		var caption = "%d  %s%s · %s" % [i + 1, crew_tag, estimate.title, timing]
 		if not estimate.reason.is_empty(): caption += "\n" + estimate.reason
 		elif estimate.start >= budget: caption += "\nNext turn"
 		elif estimate.end > budget: caption += "\nContinues next turn"
@@ -1280,17 +1283,35 @@ func _update_turn_report() -> void:
 		turn_shot_buttons.add_child(button)
 
 func _dispersion(tank) -> float:
-	var angle = 0.0015 + tank.speed * 0.0015
-	if not tank.model.functional("Gunsight"): angle += 0.025
+	var base_cone = 0.0012
+	var stab_ok = ("stabilizer_damaged" not in tank or not tank.stabilizer_damaged) and tank.model.functional("Turret drive")
+	var stab = tank.config.gun_stabilization if ("config" in tank and tank.config != null and stab_ok) else "NONE"
+	match stab:
+		"NONE":
+			if tank.speed > 0.2:
+				base_cone += tank.speed * 0.0065 + absf(tank.yaw_rate) * 0.045 + tank.terrain_roughness * 0.02
+		"VERTICAL_ONLY":
+			if tank.speed > 0.2:
+				base_cone += tank.speed * 0.0018 + absf(tank.yaw_rate) * 0.030 + tank.terrain_roughness * 0.01
+		"BASIC_TWO_AXIS":
+			if tank.speed > 4.5: base_cone += (tank.speed - 4.5) * 0.0025
+			if absf(tank.yaw_rate) > 0.25: base_cone += (absf(tank.yaw_rate) - 0.25) * 0.035
+			if tank.terrain_roughness > 0.15: base_cone += (tank.terrain_roughness - 0.15) * 0.018
+		"MODERN_TWO_AXIS":
+			if tank.speed > 10.0: base_cone += (tank.speed - 10.0) * 0.0008
+	if not tank.model.functional("Gunsight"): base_cone += 0.0075
 	for c in tank.model.crew:
-		if c.station == "Gunner" and c.state != "Fit": angle += 0.008
-	return angle
+		if c.station == "Gunner" and c.state == "Wounded": base_cone += 0.003
+		elif c.station == "Gunner" and c.state == "Seriously wounded": base_cone += 0.007
+	return base_cone
 
 func _fire(tank) -> void:
 	if phase != "EXECUTION" or not tank.ready_to_shoot(): return
 	var origin: Vector3 = tank.position + Vector3(0, 2.65, 0)
 	var dir: Vector3
 	var range_m: float = 75.0
+	var ammo: AmmunitionData = tank.get_active_ammo() if tank.has_method("get_active_ammo") else AmmunitionData.create_apcbc()
+	var muzzle_speed = ammo.muzzle_velocity
 	
 	if tank == player and player.doctrine_fire_authorized and not fields.fire.button_pressed and player_firing_solution != null:
 		dir = player_firing_solution.compute_shell_direction(origin, rng)
@@ -1304,7 +1325,7 @@ func _fire(tank) -> void:
 			var bearing = deg_to_rad(tank.orders.get("bearing", 90.0))
 			range_m = tank.orders.get("range", 75.0)
 			aim = tank.position + Vector3(sin(bearing) * range_m, tank.orders.get("height", 1.4), -cos(bearing) * range_m)
-		var time = range_m / Armor.MUZZLE_SPEED
+		var time = range_m / maxf(100.0, muzzle_speed)
 		aim.y += 4.905 * time * time
 		dir = (aim - origin).normalized()
 		var cone = _dispersion(tank)
@@ -1317,7 +1338,7 @@ func _fire(tank) -> void:
 	recent_gunfire_time = sim_time
 	playback.shot_fired()
 	var tracer = Vehicle.box(self, Vector3(0.08, 0.08, 1.5), Transform3D(Basis.IDENTITY, origin), Color("ffdb87"))
-	shells.append({"id": shot_serial, "origin": origin, "position": origin, "velocity": dir * Armor.MUZZLE_SPEED, "shooter": tank, "distance": 0.0, "tracer": tracer})
+	shells.append({"id": shot_serial, "origin": origin, "position": origin, "velocity": dir * muzzle_speed, "shooter": tank, "distance": 0.0, "tracer": tracer, "ammo": ammo})
 	CombatEffects.spawn_muzzle_blast(self, origin, dir)
 	cam_shake = maxf(cam_shake, 0.85)
 	var audio_mgr = get_node_or_null("/root/AudioManager")
@@ -1338,11 +1359,18 @@ func _fire(tank) -> void:
 	var known_origin: bool = tank == player or contact_is_visible()
 	var display_origin: Vector3 = origin if known_origin else display_contact.get("position", origin)
 	shot_events.append({"id": shot_serial, "turn_time": turn_start_time, "shooter": tank.name, "from": display_origin, "to": display_origin, "known_origin": known_origin, "fired": shot_clock, "until": shot_clock + 4, "result": "IN FLIGHT", "target": "", "hit": false})
-	_event("Shot #%02d: %s FIRED." % [shot_serial, "YOU" if tank == player else "CONTACT A"])
+	_event("Shot #%02d: %s FIRED (%s)." % [shot_serial, "YOU" if tank == player else "CONTACT A", ammo.name])
 
 func _step_shells(delta: float) -> void:
 	for i in range(shells.size() - 1, -1, -1):
 		var shell = shells[i]
+		
+		# Aerodynamic velocity degradation for kinetic ammunition in flight
+		if shell.has("ammo") and shell.ammo.category == AmmunitionData.Category.KINETIC:
+			var cur_speed = shell.velocity.length()
+			var drag_accel = shell.ammo.drag_coeff * cur_speed * cur_speed
+			shell.velocity -= shell.velocity.normalized() * drag_accel * delta
+			
 		var start: Vector3 = shell.position
 		var finish: Vector3 = start + shell.velocity * delta + Vector3(0, -4.905, 0) * delta * delta
 		var dir = (finish - start).normalized()
@@ -1366,8 +1394,10 @@ func _step_shells(delta: float) -> void:
 				enemy_was_hit_this_pulse = true
 			recent_hit_time = sim_time
 			
-			var record = target.model.resolve(local_start, local_dir, shell.velocity.length(), rng.randi())
-			record.range = shell.distance + nearest
+			var ammo_used = shell.get("ammo", AmmunitionData.create_apcbc())
+			var impact_range = shell.distance + nearest
+			var record = target.model.resolve(local_start, local_dir, shell.velocity.length(), rng.randi(), ammo_used, impact_range)
+			record.range = impact_range
 			record.target = target.name
 			record.shooter = shell.shooter.name
 			record.shot_id = shell.id
@@ -1384,6 +1414,8 @@ func _step_shells(delta: float) -> void:
 			_set_shot_result(shell.id, impact_world_pos, record.result, target.name, true)
 			_event(_shot_title(record) + ": " + record.result + ".")
 			if not record.effects.is_empty(): _event(("Your tank: " if target == player else "Contact A: ") + "; ".join(record.effects))
+			if record.has("debug_report"):
+				print("\n" + record.debug_report + "\n")
 			remove = true
 		elif obstacle_distance <= segment:
 			CombatEffects.spawn_impact_fx(self, obstruction.position, obstruction.get("normal", Vector3.UP), "GROUND_MISS")
