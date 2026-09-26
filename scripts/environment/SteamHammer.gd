@@ -15,7 +15,9 @@ func _ready() -> void:
 
 func _setup_audio() -> void:
 	audio_player = AudioStreamPlayer3D.new()
-	audio_player.stream = AudioManager.get_stream("steam_press")
+	var audio_mgr = get_node_or_null("/root/AudioManager")
+	if audio_mgr != null and audio_mgr.has_method("get_stream"):
+		audio_player.stream = audio_mgr.get_stream("steam_press")
 	audio_player.volume_db = 8.0
 	audio_player.unit_size = 35.0
 	audio_player.max_distance = 650.0
@@ -34,8 +36,10 @@ func _start_cycle() -> void:
 	is_active = true
 	timer = 0.0
 	audio_player.play()
-	SoundEventManager.set_masking(true, 1.0)
-	SoundEventManager.emit_sound(global_position, 550.0, "industrial_press", self)
+	var sound_mgr = get_node_or_null("/root/SoundEventManager")
+	if sound_mgr != null:
+		sound_mgr.set_masking(true, 1.0)
+		sound_mgr.emit_sound(global_position, 550.0, "industrial_press", self)
 
 	if steam_particles:
 		steam_particles.emitting = true
@@ -44,7 +48,9 @@ func _start_cycle() -> void:
 func _stop_cycle() -> void:
 	is_active = false
 	timer = 0.0
-	SoundEventManager.set_masking(false, 0.0)
+	var sound_mgr = get_node_or_null("/root/SoundEventManager")
+	if sound_mgr != null:
+		sound_mgr.set_masking(false, 0.0)
 
 	if steam_particles:
 		steam_particles.emitting = false

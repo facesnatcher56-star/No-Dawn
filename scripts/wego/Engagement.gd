@@ -13,6 +13,34 @@ const SensorModel = preload("res://scripts/wego/SensorModel.gd")
 const FiringSolution = preload("res://scripts/wego/FiringSolution.gd")
 const CrewDoctrine = preload("res://scripts/wego/CrewDoctrine.gd")
 const WegoTimeline = preload("res://scripts/wego/WegoTimeline.gd")
+const MASTODON_SCENE = preload("res://scenes/tank/A47_Mastodon_Player.tscn")
+const CombatEffects = preload("res://scripts/wego/CombatEffects.gd")
+const WorldPlanningGraphics = preload("res://scripts/wego/WorldPlanningGraphics.gd")
+
+var world_graphics: WorldPlanningGraphics
+var ghost_tank: A47_Mastodon_Vehicle
+
+# 3D Tactical Perspective Camera
+var cam_target: Vector3 = Vector3(-175, 0, 110)
+var cam_yaw: float = deg_to_rad(-65.0)
+var cam_pitch: float = deg_to_rad(-40.0)
+var cam_distance: float = 46.0
+var cam_fov: float = 58.0
+var cam_shake: float = 0.0
+var is_orbiting: bool = false
+var last_mouse_pos: Vector2 = Vector2.ZERO
+
+# Collapsible Drawers & HUD Controls
+var left_drawer: Control
+var right_drawer: Control
+var radio_callout_label: Label
+var radio_callout_timer: float = 0.0
+var contact_summary_btn: Button
+var tank_card_label: Label
+var drawer_orders_btn: Button
+var drawer_crew_btn: Button
+var drawer_intel_btn: Button
+var drawer_shots_btn: Button
 
 var player
 var enemy
@@ -136,11 +164,22 @@ func _ready() -> void:
 	enemy.track = enemy_track
 	add_child(enemy)
 	
+	# Initialize 3D World Planning Graphics
+	world_graphics = WorldPlanningGraphics.new()
+	add_child(world_graphics)
+
+	# Initialize 3D Ghost Tank for reconnaissance
+	ghost_tank = MASTODON_SCENE.instantiate()
+	add_child(ghost_tank)
+	ghost_tank.visible = false
+	_apply_ghost_material(ghost_tank)
+
 	camera = Camera3D.new()
-	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = zoom
+	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	camera.fov = cam_fov
 	add_child(camera)
 	camera.current = true
+	_update_camera(0.0)
 	_build_ui()
 	_set_map_running(false)
 	
@@ -169,6 +208,61 @@ func _ready() -> void:
 	_publish_contact()
 	contact_visual_position = display_contact.position
 	_log("Systems operational. Tactical WEGO initialized.")
+
+func _apply_ghost_material(tank: A47_Mastodon_Vehicle) -> void:
+	if tank == null or tank.visual == null: return
+	var ghost_mat = StandardMaterial3D.new()
+	ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ghost_mat.albedo_color = Color(0.92, 0.72, 0.28, 0.38)
+	ghost_mat.emission_enabled = true
+	ghost_mat.emission = Color(0.92, 0.65, 0.20)
+	ghost_mat.emission_energy_multiplier = 0.75
+	ghost_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	for arm_node in tank.visual.nodes_by_category["ARM"]:
+		if arm_node is MeshInstance3D:
+			arm_node.material_override = ghost_mat
+	for cmp_node in tank.visual.nodes_by_category["CMP"]:
+		if cmp_node is MeshInstance3D:
+			cmp_node.material_override = ghost_mat
+
+func _update_camera(delta: float) -> void:
+	if not is_instance_valid(player) or camera == null: return
+	
+	if delta > 0.0:
+		if phase == "EXECUTION":
+			var target_pitch = deg_to_rad(-28.0)
+			var target_dist = 28.0
+			if not is_orbiting:
+				cam_pitch = lerpf(cam_pitch, target_pitch, delta * 2.0)
+				cam_distance = lerpf(cam_distance, target_dist, delta * 2.0)
+			var combat_midpoint = player.position.lerp(enemy.position, 0.35)
+			cam_target = cam_target.lerp(combat_midpoint, delta * 3.0)
+		else:
+			if not is_orbiting:
+				cam_target = cam_target.lerp(player.position + Vector3(6, 0, 0), delta * 4.0)
+	elif not is_orbiting:
+		cam_target = player.position + Vector3(6, 0, 0)
+
+	var shake_offset = Vector3.ZERO
+	if cam_shake > 0.0:
+		shake_offset = Vector3(
+			sin(ui_time * 53.0) * cam_shake,
+			cos(ui_time * 41.0) * cam_shake * 0.5,
+			sin(ui_time * 67.0) * cam_shake
+		)
+		cam_shake = maxf(0.0, cam_shake - delta * 3.0)
+
+	var rot_quat = Quaternion.from_euler(Vector3(cam_pitch, cam_yaw, 0.0))
+	var offset = rot_quat * Vector3(0, 0, cam_distance)
+	camera.position = cam_target + offset + shake_offset
+	camera.look_at(cam_target + Vector3(0, 1.4, 0))
+
+func _callout(speaker: String, text_val: String) -> void:
+	if radio_callout_label != null:
+		radio_callout_label.text = "[RADIO] %s: \"%s\"" % [speaker.to_upper(), text_val]
+		radio_callout_timer = 3.5
+		radio_callout_label.visible = true
+	_log("%s: %s" % [speaker, text_val])
 
 func _set_map_running(enabled: bool) -> void:
 	map_scripts.clear()
@@ -301,7 +395,17 @@ func _build_ui() -> void:
 	overlay.game = self
 	root.add_child(overlay)
 	var left = _panel(root, 0, 0, 0.22, 1.0)
-	_label(left, "ORDERS", 18)
+	left_drawer = left.get_parent().get_parent()
+	var left_header = HBoxContainer.new()
+	left.add_child(left_header)
+	var left_title = _label(left_header, "ORDERS", 18)
+	left_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var left_close = Button.new()
+	left_close.text = "◀"
+	left_close.tooltip_text = "Collapse Orders Drawer [TAB]"
+	left_close.custom_minimum_size = Vector2(28, 26)
+	left_close.pressed.connect(func(): left_drawer.visible = false)
+	left_header.add_child(left_close)
 	pulse_mode_label = _label(left, "MANEUVER MODE (8.0s pulse)", 12)
 	pulse_mode_label.add_theme_color_override("font_color", Color("8cddf0"))
 	status_label = _label(left, "", 13)
@@ -426,7 +530,17 @@ func _build_ui() -> void:
 	controls.pop_back()
 	controls.erase(advanced_toggle)
 	var right = _panel(root, 0.78, 0, 1.0, 1.0)
-	_label(right, "INTELLIGENCE", 18)
+	right_drawer = right.get_parent().get_parent()
+	var right_header = HBoxContainer.new()
+	right.add_child(right_header)
+	var right_title = _label(right_header, "INTELLIGENCE", 18)
+	right_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var right_close = Button.new()
+	right_close.text = "▶"
+	right_close.tooltip_text = "Collapse Intelligence Drawer"
+	right_close.custom_minimum_size = Vector2(28, 26)
+	right_close.pressed.connect(func(): right_drawer.visible = false)
+	right_header.add_child(right_close)
 	contact_label = _label(right, "", 12)
 	contact_fire_button = _button(right, "FIRE AT ESTIMATE", _queue_contact_fire, 32)
 	contact_fire_button.tooltip_text = "Queue a shot at the marked estimate."
@@ -549,6 +663,52 @@ func _build_ui() -> void:
 	var footer = _hud_bar(root, 0.24, 0.94, 0.76, 1.0)
 	event_log = _label(footer, "", 12)
 	event_log.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	# Radio Transmission Callout HUD Banner (Top Center)
+	var radio_panel = PanelContainer.new()
+	root.add_child(radio_panel)
+	radio_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	radio_panel.anchor_left = 0.28
+	radio_panel.anchor_right = 0.72
+	radio_panel.anchor_top = 0.088
+	radio_panel.anchor_bottom = 0.138
+	radio_panel.offset_left = 6
+	radio_panel.offset_top = 4
+	radio_panel.offset_right = -6
+	radio_panel.offset_bottom = -4
+	var r_style = StyleBoxFlat.new()
+	r_style.bg_color = Color(0.04, 0.08, 0.06, 0.88)
+	r_style.border_color = Color(0.3, 0.85, 0.45, 0.85)
+	r_style.set_border_width_all(1)
+	r_style.set_corner_radius_all(4)
+	radio_panel.add_theme_stylebox_override("panel", r_style)
+	radio_callout_label = Label.new()
+	radio_callout_label.add_theme_font_size_override("font_size", 12)
+	radio_callout_label.add_theme_color_override("font_color", Color("77dd77"))
+	radio_callout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	radio_callout_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	radio_panel.add_child(radio_callout_label)
+	radio_panel.visible = false
+
+	# Bottom-left persistent Tank Card
+	var tank_card_box = _hud_bar(root, 0.01, 0.88, 0.23, 0.99)
+	tank_card_label = _label(tank_card_box, "A-47 MASTODON • OPERATIONAL\nAMMO: 25/25 AP • SPEED: 0.0 m/s\nSYSTEMS STABLE", 11)
+	tank_card_label.add_theme_color_override("font_color", Color("8cddf0"))
+
+	# Bottom-right HUD Toolbar for quick drawer toggles
+	var toolbar_box = _hud_bar(root, 0.77, 0.94, 0.99, 1.0)
+	var toolbar_row = HBoxContainer.new()
+	toolbar_box.add_child(toolbar_row)
+	drawer_orders_btn = _button(toolbar_row, "ORDERS", func(): left_drawer.visible = not left_drawer.visible, 24)
+	drawer_crew_btn = _button(toolbar_row, "CREW", func():
+		right_drawer.visible = true
+		detail_tabs.current_tab = 2, 24)
+	drawer_intel_btn = _button(toolbar_row, "INTEL", func():
+		right_drawer.visible = true
+		detail_tabs.current_tab = 0, 24)
+	drawer_shots_btn = _button(toolbar_row, "SHOTS", func():
+		right_drawer.visible = true
+		detail_tabs.current_tab = 1, 24)
 
 func _can_edit_orders() -> bool:
 	return phase not in ["EXECUTION", "COMPLETE"] or (phase == "EXECUTION" and time_left > 0.0001 and playback.paused and not playback.busy())
@@ -1161,7 +1321,11 @@ func _fire(tank) -> void:
 	playback.shot_fired()
 	var tracer = Vehicle.box(self, Vector3(0.08, 0.08, 1.5), Transform3D(Basis.IDENTITY, origin), Color("ffdb87"))
 	shells.append({"id": shot_serial, "origin": origin, "position": origin, "velocity": dir * Armor.MUZZLE_SPEED, "shooter": tank, "distance": 0.0, "tracer": tracer})
-	AudioManager.play_sound_3d("cannon_fire", origin, 1, 40, 700)
+	CombatEffects.spawn_muzzle_blast(self, origin, dir)
+	cam_shake = maxf(cam_shake, 0.85)
+	var audio_mgr = get_node_or_null("/root/AudioManager")
+	if audio_mgr != null and audio_mgr.has_method("play_sound_3d"):
+		audio_mgr.play_sound_3d("cannon_fire", origin, 1, 40, 700)
 	
 	# Acoustic gunshot detection
 	var other_tank = enemy if tank == player else player
@@ -1217,11 +1381,15 @@ func _step_shells(delta: float) -> void:
 			if records.size() == 1: selected_record.clear()
 			selected_record.add_item("#%02d / %s → %s / %s" % [shell.id, "YOU" if shell.shooter == player else "ENEMY", "YOU" if target == player else "ENEMY", record.result])
 			playback.enqueue(record)
-			_set_shot_result(shell.id, start + dir * nearest, record.result, target.name, true)
+			var impact_world_pos = start + dir * nearest
+			CombatEffects.spawn_impact_fx(self, impact_world_pos, -dir, record.result)
+			cam_shake = maxf(cam_shake, 0.5)
+			_set_shot_result(shell.id, impact_world_pos, record.result, target.name, true)
 			_event(_shot_title(record) + ": " + record.result + ".")
 			if not record.effects.is_empty(): _event(("Your tank: " if target == player else "Contact A: ") + "; ".join(record.effects))
 			remove = true
 		elif obstacle_distance <= segment:
+			CombatEffects.spawn_impact_fx(self, obstruction.position, obstruction.get("normal", Vector3.UP), "GROUND_MISS")
 			_set_shot_result(shell.id, obstruction.position, "MISS • COVER / GROUND", "Cover / ground", false)
 			_event("Shot #%02d: %s → COVER / GROUND. No tank hit." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
 			
@@ -1385,14 +1553,30 @@ func _refresh_orders() -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(player): return
 	ui_time += delta
-	camera.size = zoom
-	camera.position = player.position + Vector3(37, 90, 65)
-	camera.look_at(player.position + Vector3(37, 0, 0))
+	_update_camera(delta)
+	
+	if radio_callout_timer > 0.0:
+		radio_callout_timer -= delta
+		if radio_callout_timer <= 0.0 and radio_callout_label:
+			radio_callout_label.visible = false
+
 	var pulse_name = "COMBAT (3s)" if (timeline and timeline.current_mode == WegoTimeline.PulseMode.COMBAT) else "MANEUVER (8s)"
 	var phase_str = "REPLAY" if not playback.active.is_empty() else ("SIMULTANEOUS EXEC" if phase == "EXECUTION" and not playback.paused else "PLANNING")
 	status_label.text = "PULSE #%02d • %s\nMODE: %s\n%s • %d rnds" % [turn, phase_str, pulse_name, player.model.status(), player.model.rounds]
 	crew_label.text = player.station_report()
-	
+
+	if tank_card_label != null:
+		tank_card_label.text = "A-47 MASTODON • %s\nAMMO: %d/%d • SPEED: %.1fm/s\n%s" % [
+			player.model.status().to_upper(),
+			player.model.rounds,
+			25 if (ammo_choice == null or ammo_choice.selected == 0) else 40,
+			player.speed,
+			"LOADER EXTINGUISHING" if player.orders.get("extinguish", false) else "SYSTEMS STABLE"
+		]
+
+	var visible_contact = contact_is_visible()
+	enemy.visible = visible_contact
+
 	if player_track != null and not display_contact.is_empty():
 		var age = sim_time - player_track.last_observation_time
 		var radius: float = maxf(1.5, player_track.position_uncertainty)
@@ -1400,7 +1584,6 @@ func _process(delta: float) -> void:
 		contact_visual_position = contact_visual_position.lerp(player_track.estimated_position, blend)
 		contact_visual_radius = lerpf(contact_visual_radius, radius, blend)
 		var distance = player_track.estimated_range
-		var visible_contact = contact_is_visible()
 		var state_str = "SIGHTED" if visible_contact else ("LAST SEEN" if player_track.has_silhouette else "UNCONFIRMED")
 		var sol_quality = player_firing_solution.solution_quality if player_firing_solution else "NO SOLUTION"
 		contact_label.text = "CONTACT A • %s\nEst. Range: %.0f m (±%.0f m)\nHeading: %03d° (±%d°) • Spd: %.1f m/s\nSolution: %s (Age: %.1fs)" % [
@@ -1413,9 +1596,28 @@ func _process(delta: float) -> void:
 			sol_quality,
 			age
 		]
-		enemy.visible = visible_contact
-	else:
-		enemy.visible = false
+	
+	# Update in-world 3D Ghost Tank
+	if ghost_tank != null:
+		if not visible_contact and player_track != null and player_track.has_silhouette:
+			ghost_tank.visible = true
+			ghost_tank.position = player_track.silhouette_position
+			ghost_tank.rotation.y = player_track.silhouette_yaw
+		else:
+			ghost_tank.visible = false
+
+	# Update in-world 3D Planning Graphics
+	if world_graphics != null:
+		var q_pts: Array = []
+		for a in action_queue.actions:
+			if a.kind == "move": q_pts.append(a.point)
+		world_graphics.update_route(player.position, travel_target, q_pts, phase != "EXECUTION")
+		world_graphics.update_observation(player.position, player.rotation.y + player.model.turret_yaw, phase != "EXECUTION")
+		if not visible_contact and player_track != null and player_track.has_silhouette and player_track.estimated_speed_mps > 0.4:
+			world_graphics.update_predicted_corridor(player_track.get_predicted_corridor(5.5), true)
+		else:
+			world_graphics.update_predicted_corridor({}, false)
+
 	_refresh_orders()
 	selected_record.disabled = phase == "EXECUTION"
 	pause_button.disabled = phase != "EXECUTION"
@@ -1443,29 +1645,63 @@ func _log(message: String) -> void:
 	if event_log: event_log.text = "\n".join(log_lines)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_F3:
-		debug_overlay_enabled = not debug_overlay_enabled
-		_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		input_mode = "select"
-		order_notice = "Target selection cancelled. Existing orders are unchanged."
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP: zoom = maxf(35, zoom - 8)
-		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN: zoom = minf(200, zoom + 8)
-		if event.button_index == MOUSE_BUTTON_RIGHT and _can_edit_orders():
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_F3:
+			debug_overlay_enabled = not debug_overlay_enabled
+			player.set_debug_visuals(debug_overlay_enabled)
+			enemy.set_debug_visuals(debug_overlay_enabled)
+			_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
+		elif event.keycode == KEY_F:
+			cam_target = player.position + Vector3(6, 0, 0)
+			_event("Camera: Focused on Mastodon.")
+		elif event.keycode == KEY_C:
+			if player_track != null:
+				cam_target = player_track.estimated_position
+				_event("Camera: Focused on contact estimate.")
+		elif event.keycode == KEY_TAB:
+			if left_drawer: left_drawer.visible = not left_drawer.visible
+			if right_drawer: right_drawer.visible = not right_drawer.visible
+		elif event.keycode == KEY_W:
+			cam_target += Vector3(-sin(cam_yaw), 0, -cos(cam_yaw)) * 6.0
+		elif event.keycode == KEY_S:
+			cam_target += Vector3(sin(cam_yaw), 0, cos(cam_yaw)) * 6.0
+		elif event.keycode == KEY_A:
+			cam_target += Vector3(-cos(cam_yaw), 0, sin(cam_yaw)) * 6.0
+		elif event.keycode == KEY_D:
+			cam_target += Vector3(cos(cam_yaw), 0, -sin(cam_yaw)) * 6.0
+		elif event.keycode == KEY_ESCAPE:
 			input_mode = "select"
-			order_notice = "Target selection cancelled. Use CLEAR ALL to remove queued orders."
-		if event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
-			var ray = camera.project_ray_origin(event.position)
-			var direction = camera.project_ray_normal(event.position)
-			var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
-			if hit != null:
-				if input_mode == "move": _queue_move(hit)
-				elif input_mode == "fire": _queue_fire(hit)
-				elif input_mode in ["aim", "hull"]:
-					var kind = input_mode
-					if kind == "aim": _aim_at(hit)
-					_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
-					input_mode = "select"
-				else: order_notice = "Choose MOVE or AIM & FIRE first, then click a point in the yard."
+			order_notice = "Target selection cancelled. Existing orders are unchanged."
+	elif event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			is_orbiting = event.pressed
+			last_mouse_pos = event.position
+			if event.pressed and _can_edit_orders() and input_mode != "select":
+				input_mode = "select"
+				order_notice = "Target selection cancelled. Use CLEAR ALL to remove queued orders."
+		elif event.pressed:
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				cam_distance = clampf(cam_distance - 4.0, 14.0, 140.0)
+				zoom = clampf(zoom - 8.0, 35.0, 200.0)
+			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				cam_distance = clampf(cam_distance + 4.0, 14.0, 140.0)
+				zoom = clampf(zoom + 8.0, 35.0, 200.0)
+			elif event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
+				var ray = camera.project_ray_origin(event.position)
+				var direction = camera.project_ray_normal(event.position)
+				var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
+				if hit != null:
+					if input_mode == "move": _queue_move(hit)
+					elif input_mode == "fire": _queue_fire(hit)
+					elif input_mode in ["aim", "hull"]:
+						var kind = input_mode
+						if kind == "aim": _aim_at(hit)
+						_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
+						input_mode = "select"
+					else: order_notice = "Choose MOVE or AIM & FIRE first, then click a point in the yard."
+	elif event is InputEventMouseMotion and is_orbiting:
+		var delta_mouse = event.position - last_mouse_pos
+		last_mouse_pos = event.position
+		cam_yaw += delta_mouse.x * 0.006
+		cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-80.0), deg_to_rad(-10.0))
 

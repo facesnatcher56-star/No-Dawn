@@ -12,31 +12,34 @@ var driven = false
 var reached_volumes: Array[String] = []
 var impact_marker: MeshInstance3D
 
+const MASTODON_SCENE = preload("res://scenes/tank/A47_Mastodon_Player.tscn")
+var tank_model: A47_Mastodon_Vehicle
+
 func _ready() -> void:
 	stretch = true
-	custom_minimum_size = Vector2(maxf(custom_minimum_size.x, 260), maxf(custom_minimum_size.y, 180))
+	custom_minimum_size = Vector2(maxf(custom_minimum_size.x, 380), maxf(custom_minimum_size.y, 240))
 	var viewport = SubViewport.new()
-	viewport.size = Vector2i(480, 300)
+	viewport.size = Vector2i(760, 480)
 	viewport.own_world_3d = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(viewport)
 	world = Node3D.new()
 	viewport.add_child(world)
 	camera = Camera3D.new()
-	camera.fov = 26
+	camera.fov = 30
 	viewport.add_child(camera)
-	camera.position = Vector3(8, 6, -9)
-	camera.look_at(Vector3(0, 1.5, 0))
+	camera.position = Vector3(7.5, 5.0, -8.0)
+	camera.look_at(Vector3(0, 1.4, 0))
 	var light = DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-40, -30, 0)
 	viewport.add_child(light)
 	var env_node = WorldEnvironment.new()
 	var env = Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("111d28")
+	env.background_color = Color("0d1822")
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color.WHITE
-	env.ambient_light_energy = 0.7
+	env.ambient_light_energy = 0.8
 	env_node.environment = env
 	viewport.add_child(env_node)
 	gui_input.connect(_inspect)
@@ -52,6 +55,12 @@ func show_record(data: Dictionary, externally_driven = false) -> void:
 	timer = 0
 	driven = externally_driven
 	playing = not driven
+
+	# High-detail A-47 Mastodon vehicle model in translucent X-Ray mode
+	tank_model = MASTODON_SCENE.instantiate()
+	world.add_child(tank_model)
+	tank_model.set_display_mode(MastodonVisualController.DisplayMode.XRAY)
+
 	for volume in record.volumes:
 		var tint = Color(0.3, 0.7, 0.9, 0.09) if volume.armor else Color(0.35, 0.65, 0.6, 0.3)
 		if volume.crew: tint = Color(0.9, 0.75, 0.4, 0.5)

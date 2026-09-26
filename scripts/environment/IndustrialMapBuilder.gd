@@ -10,12 +10,17 @@ var mat_rust: StandardMaterial3D
 var mat_pipe: StandardMaterial3D
 var mat_fire: StandardMaterial3D
 
+var mat_road: StandardMaterial3D
+var mat_berm: StandardMaterial3D
+var mat_stripe: StandardMaterial3D
+
 var blast_furnace_scene = preload("res://scenes/BlastFurnace.tscn")
 var steam_hammer_scene = preload("res://scenes/SteamHammer.tscn")
 
 func _ready() -> void:
 	_init_materials()
 	_build_ground()
+	_build_tactical_terrain_and_ridges()
 	_build_railway_system()
 	_build_warehouses()
 	_build_silo_complexes()
@@ -28,29 +33,41 @@ func _ready() -> void:
 
 func _init_materials() -> void:
 	mat_ground = StandardMaterial3D.new()
-	mat_ground.albedo_color = Color(0.12, 0.11, 0.10)
+	mat_ground.albedo_color = Color(0.25, 0.24, 0.22)
 	mat_ground.roughness = 0.95
 
+	mat_road = StandardMaterial3D.new()
+	mat_road.albedo_color = Color(0.18, 0.19, 0.21)
+	mat_road.roughness = 0.85
+
+	mat_berm = StandardMaterial3D.new()
+	mat_berm.albedo_color = Color(0.28, 0.26, 0.22)
+	mat_berm.roughness = 0.98
+
+	mat_stripe = StandardMaterial3D.new()
+	mat_stripe.albedo_color = Color(0.78, 0.76, 0.68)
+	mat_stripe.roughness = 0.9
+
 	mat_brick = StandardMaterial3D.new()
-	mat_brick.albedo_color = Color(0.32, 0.16, 0.12)
-	mat_brick.roughness = 0.9
+	mat_brick.albedo_color = Color(0.42, 0.24, 0.18)
+	mat_brick.roughness = 0.88
 
 	mat_concrete = StandardMaterial3D.new()
-	mat_concrete.albedo_color = Color(0.22, 0.23, 0.24)
-	mat_concrete.roughness = 0.85
+	mat_concrete.albedo_color = Color(0.36, 0.38, 0.39)
+	mat_concrete.roughness = 0.82
 
 	mat_steel = StandardMaterial3D.new()
-	mat_steel.albedo_color = Color(0.18, 0.19, 0.21)
+	mat_steel.albedo_color = Color(0.22, 0.24, 0.26)
 	mat_steel.metallic = 0.75
-	mat_steel.roughness = 0.4
+	mat_steel.roughness = 0.38
 
 	mat_rust = StandardMaterial3D.new()
-	mat_rust.albedo_color = Color(0.38, 0.20, 0.12)
-	mat_rust.metallic = 0.4
-	mat_rust.roughness = 0.8
+	mat_rust.albedo_color = Color(0.46, 0.26, 0.16)
+	mat_rust.metallic = 0.35
+	mat_rust.roughness = 0.78
 
 	mat_pipe = StandardMaterial3D.new()
-	mat_pipe.albedo_color = Color(0.25, 0.27, 0.28)
+	mat_pipe.albedo_color = Color(0.32, 0.34, 0.36)
 	mat_pipe.metallic = 0.6
 	mat_pipe.roughness = 0.45
 
@@ -387,3 +404,128 @@ func _create_lamp_post(pos: Vector3) -> void:
 	light.spot_angle = 50.0
 	light.shadow_enabled = false
 	add_child(light)
+
+func _build_tactical_terrain_and_ridges() -> void:
+	# 1. Paved Roadway with asphalt pad and center marking stripes
+	var road = MeshInstance3D.new()
+	var road_mesh = BoxMesh.new()
+	road_mesh.size = Vector3(14.0, 0.04, 520.0)
+	road_mesh.material = mat_road
+	road.mesh = road_mesh
+	road.position = Vector3(-60.0, 0.02, 0.0)
+	add_child(road)
+
+	for sz in range(-240, 240, 16):
+		var stripe = MeshInstance3D.new()
+		var sm = BoxMesh.new()
+		sm.size = Vector3(0.4, 0.06, 6.0)
+		sm.material = mat_stripe
+		stripe.mesh = sm
+		stripe.position = Vector3(-60.0, 0.03, float(sz))
+		add_child(stripe)
+
+	# 2. Hull-Down Tactical Ridges & Earth Berms
+	# Central ridge crossing between warehouses
+	_create_berm(Vector3(-75.0, 0.0, 35.0), Vector3(90.0, 1.8, 14.0), 0.15)
+	# Player flank hull-down firing position
+	_create_berm(Vector3(-148.0, 0.0, 75.0), Vector3(32.0, 1.7, 10.0), 0.0)
+	# Enemy flank hull-down berm
+	_create_berm(Vector3(-85.0, 0.0, 145.0), Vector3(36.0, 1.7, 10.0), -0.1)
+
+	# 3. Defensive Dragon's Teeth (Pyramidal anti-tank obstacles)
+	var dt_positions = [
+		Vector3(-130, 0, 40), Vector3(-125, 0, 42), Vector3(-120, 0, 44),
+		Vector3(-115, 0, 46), Vector3(-110, 0, 48),
+		Vector3(10, 0, -40), Vector3(16, 0, -38), Vector3(22, 0, -36),
+		Vector3(28, 0, -34), Vector3(34, 0, -32)
+	]
+	for dpos in dt_positions:
+		_create_dragons_tooth(dpos)
+
+	# 4. Drainage Ditch Culvert
+	var culvert = MeshInstance3D.new()
+	var cm = BoxMesh.new()
+	cm.size = Vector3(4.0, 0.8, 480.0)
+	cm.material = mat_concrete
+	culvert.mesh = cm
+	culvert.position = Vector3(-45.0, -0.3, 0.0)
+	add_child(culvert)
+
+	# 5. Smoldering Smoke Plumes in the industrial yard
+	_create_smoke_plume(Vector3(-140, 0.8, -80))
+	_create_smoke_plume(Vector3(45, 0.8, 20))
+	_create_smoke_plume(Vector3(-80, 0.8, 70))
+
+func _create_berm(pos: Vector3, size: Vector3, rot_y: float = 0.0) -> void:
+	var sb = StaticBody3D.new()
+	sb.position = pos
+	sb.rotation.y = rot_y
+	add_child(sb)
+
+	var col = CollisionShape3D.new()
+	var box = BoxShape3D.new()
+	box.size = size
+	col.shape = box
+	col.position = Vector3(0, size.y * 0.5, 0)
+	sb.add_child(col)
+
+	var mi = MeshInstance3D.new()
+	var bm = BoxMesh.new()
+	bm.size = size
+	bm.material = mat_berm
+	mi.mesh = bm
+	mi.position = Vector3(0, size.y * 0.5, 0)
+	sb.add_child(mi)
+
+	# Sloped earth approach shoulders
+	for side in [-1.0, 1.0]:
+		var shoulder = MeshInstance3D.new()
+		var psm = PrismMesh.new()
+		psm.size = Vector3(size.x, size.y * 0.9, size.z * 0.6)
+		psm.material = mat_berm
+		shoulder.mesh = psm
+		shoulder.position = Vector3(0, size.y * 0.45, side * (size.z * 0.6))
+		shoulder.rotation.x = PI * 0.5 if side > 0 else -PI * 0.5
+		sb.add_child(shoulder)
+
+func _create_dragons_tooth(pos: Vector3) -> void:
+	var tooth = MeshInstance3D.new()
+	var pm = PrismMesh.new()
+	pm.size = Vector3(1.6, 1.5, 1.6)
+	pm.material = mat_concrete
+	tooth.mesh = pm
+	tooth.position = pos + Vector3(0, 0.75, 0)
+	tooth.rotation.y = randf_range(0, PI)
+	add_child(tooth)
+
+func _create_smoke_plume(pos: Vector3) -> void:
+	var particles = GPUParticles3D.new()
+	particles.position = pos
+	particles.amount = 32
+	particles.lifetime = 4.0
+	particles.speed_scale = 0.8
+	particles.explosiveness = 0.05
+	particles.randomness = 0.5
+
+	var mat = ParticleProcessMaterial.new()
+	mat.direction = Vector3(0.2, 1.0, 0.1).normalized()
+	mat.spread = 18.0
+	mat.initial_velocity_min = 2.0
+	mat.initial_velocity_max = 4.5
+	mat.gravity = Vector3(0, 0.5, 0)
+	mat.scale_min = 1.2
+	mat.scale_max = 3.8
+	mat.color = Color(0.25, 0.27, 0.28, 0.35)
+	particles.process_material = mat
+
+	var pmesh = SphereMesh.new()
+	pmesh.radius = 0.7
+	pmesh.height = 1.4
+	var pmat = StandardMaterial3D.new()
+	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pmat.albedo_color = Color(0.22, 0.24, 0.25, 0.35)
+	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	pmesh.material = pmat
+	particles.draw_pass_1 = pmesh
+
+	add_child(particles)

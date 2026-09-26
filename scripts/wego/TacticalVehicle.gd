@@ -49,6 +49,11 @@ static func box(parent: Node3D, size: Vector3, pose: Transform3D, tint: Color) -
 	mesh.transform = pose
 	return mesh
 
+const MASTODON_SCENE = preload("res://scenes/tank/A47_Mastodon_Player.tscn")
+var visual_tank: A47_Mastodon_Vehicle
+var debug_boxes: Array[MeshInstance3D] = []
+var debug_mode_visible: bool = false
+
 func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 3
@@ -62,10 +67,23 @@ func _ready() -> void:
 	turret = Node3D.new()
 	add_child(turret)
 	for plate in model.plates:
-		box(turret if plate.turret else self, plate.size, plate.pose, color)
+		var b = box(turret if plate.turret else self, plate.size, plate.pose, color)
+		debug_boxes.append(b)
+		b.visible = false
 	for x in [-1.9, 1.9]:
-		box(self, Vector3(0.65, 0.8, 6.5), Transform3D(Basis.IDENTITY, Vector3(x, 0.65, 0)), Color("242a2d"))
-	box(turret, Vector3(0.18, 0.18, 4), Transform3D(Basis.IDENTITY, Vector3(0, 2.65, -3)), Color("3a4143"))
+		var b = box(self, Vector3(0.65, 0.8, 6.5), Transform3D(Basis.IDENTITY, Vector3(x, 0.65, 0)), Color("242a2d"))
+		debug_boxes.append(b)
+		b.visible = false
+	var b_gun = box(turret, Vector3(0.18, 0.18, 4), Transform3D(Basis.IDENTITY, Vector3(0, 2.65, -3)), Color("3a4143"))
+	debug_boxes.append(b_gun)
+	b_gun.visible = false
+
+	# Instantiate the real high-detail A-47 Mastodon vehicle model
+	visual_tank = MASTODON_SCENE.instantiate()
+	add_child(visual_tank)
+	if color != Color("657665"):
+		_apply_enemy_camo()
+
 	lamp = SpotLight3D.new()
 	turret.add_child(lamp)
 	lamp.position = Vector3(1, 2.9, -1.5)
@@ -81,6 +99,22 @@ func _ready() -> void:
 	muzzle_flash.light_energy = 12
 	muzzle_flash.visible = false
 	turret.add_child(muzzle_flash)
+
+func set_debug_visuals(enabled: bool) -> void:
+	debug_mode_visible = enabled
+	for b in debug_boxes:
+		if is_instance_valid(b):
+			b.visible = enabled
+
+func _apply_enemy_camo() -> void:
+	if visual_tank == null or visual_tank.visual == null: return
+	var enemy_mat = StandardMaterial3D.new()
+	enemy_mat.albedo_color = Color(0.62, 0.56, 0.42) # Weathered Dunkelgelb
+	enemy_mat.roughness = 0.86
+	enemy_mat.metallic = 0.25
+	for arm_node in visual_tank.visual.nodes_by_category["ARM"]:
+		if arm_node is MeshInstance3D:
+			arm_node.material_override = enemy_mat
 
 func commit(plan: Dictionary) -> void:
 	orders = plan.duplicate(true)
@@ -135,6 +169,23 @@ func step(delta: float) -> void:
 	if turret != null:
 		turret.rotation.y = model.turret_yaw
 
+	# Synchronize visual 3D Mastodon tank model
+	if visual_tank != null:
+		visual_tank.rotate_turret(model.turret_yaw)
+		visual_tank.set_wheel_speed(speed * 3.5)
+		visual_tank.set_commander_exposed(orders.get("observe", true) and not model.catastrophic)
+		if orders.has("aim_point"):
+			var dist = position.distance_to(orders.aim_point)
+			var dy = (orders.aim_point.y + orders.get("height", 1.4)) - (position.y + 2.4)
+			var pitch = -atan2(dy, maxf(dist, 1.0))
+			visual_tank.elevate_gun(clampf(pitch, deg_to_rad(-8.0), deg_to_rad(20.0)))
+		elif orders.get("tracking_contact", false) and track != null:
+			var dist = position.distance_to(track.estimated_position)
+			var dy = (track.estimated_position.y + 1.4) - (position.y + 2.4)
+			var pitch = -atan2(dy, maxf(dist, 1.0))
+			visual_tank.elevate_gun(clampf(pitch, deg_to_rad(-8.0), deg_to_rad(20.0)))
+		visual_tank.anim.update(delta)
+
 func gun_goal_yaw() -> float:
 	if orders.has("aim_point"):
 		var offset: Vector3 = orders.aim_point - position
@@ -154,7 +205,10 @@ func consume_round() -> void:
 	doctrine_fire_authorized = false
 	model.consume_round()
 	flash = 0.5
-	muzzle_flash.visible = true
+	if muzzle_flash != null:
+		muzzle_flash.visible = true
+	if visual_tank != null:
+		visual_tank.fire_recoil()
 
 func station_report() -> String:
 	var lines = PackedStringArray()

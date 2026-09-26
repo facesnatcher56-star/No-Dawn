@@ -19,7 +19,14 @@ func _process(_delta: float) -> void:
 	queue_redraw()
 
 func screen(point: Vector3) -> Vector2:
+	if game == null or game.camera == null:
+		return Vector2.ZERO
 	return game.camera.unproject_position(point)
+
+func _has_valid_poly_area(pts: PackedVector2Array) -> bool:
+	if pts.size() < 3: return false
+	var indices = Geometry2D.triangulate_polygon(pts)
+	return indices.size() >= 3
 
 func _tag(at: Vector2, words: String, tint: Color) -> void:
 	var lines = words.split("\n")
@@ -84,16 +91,28 @@ func _draw() -> void:
 			var corridor = track.get_predicted_corridor(5.5)
 			var left_scr = PackedVector2Array()
 			var right_scr = PackedVector2Array()
-			for pt in corridor.left_edge: left_scr.append(screen(pt + Vector3.UP * 0.2))
-			for pt in corridor.right_edge: right_scr.append(screen(pt + Vector3.UP * 0.2))
+			var valid_corridor = true
+			for pt in corridor.left_edge:
+				if game.camera != null and game.camera.is_position_behind(pt):
+					valid_corridor = false
+					break
+				left_scr.append(screen(pt + Vector3.UP * 0.2))
+			if valid_corridor:
+				for pt in corridor.right_edge:
+					if game.camera != null and game.camera.is_position_behind(pt):
+						valid_corridor = false
+						break
+					right_scr.append(screen(pt + Vector3.UP * 0.2))
 			
-			var poly = PackedVector2Array()
-			for pt in left_scr: poly.append(pt)
-			for i in range(right_scr.size() - 1, -1, -1): poly.append(right_scr[i])
-			draw_colored_polygon(poly, Color(AMBER.r, AMBER.g, AMBER.b, 0.08))
-			for i in range(left_scr.size() - 1):
-				draw_dashed_line(left_scr[i], left_scr[i + 1], Color(AMBER, 0.35), 1.5, 6, true)
-				draw_dashed_line(right_scr[i], right_scr[i + 1], Color(AMBER, 0.35), 1.5, 6, true)
+			if valid_corridor and left_scr.size() >= 2 and right_scr.size() >= 2:
+				var poly = PackedVector2Array()
+				for pt in left_scr: poly.append(pt)
+				for i in range(right_scr.size() - 1, -1, -1): poly.append(right_scr[i])
+				if _has_valid_poly_area(poly):
+					draw_colored_polygon(poly, Color(AMBER.r, AMBER.g, AMBER.b, 0.08))
+				for i in range(left_scr.size() - 1):
+					draw_dashed_line(left_scr[i], left_scr[i + 1], Color(AMBER, 0.35), 1.5, 6, true)
+					draw_dashed_line(right_scr[i], right_scr[i + 1], Color(AMBER, 0.35), 1.5, 6, true)
 				
 		# B. Last-Known Silhouette (Ghost)
 		if track.has_silhouette and not confirmed:
@@ -133,14 +152,17 @@ func _draw() -> void:
 		var center: Vector3 = game.contact_visual_position
 		var radius: float = game.contact_visual_radius
 		var ring = PackedVector2Array()
-		for i in range(65):
-			var angle = i * TAU / 64.0
+		for i in range(32):
+			var angle = i * TAU / 32.0
 			ring.append(screen(center + Vector3(cos(angle) * radius, 0.35, sin(angle) * radius)))
 			
 		var tint = RED if confirmed else AMBER
-		draw_colored_polygon(ring, Color(tint, 0.10))
-		for i in range(64):
-			if confirmed or i % 4 < 2: draw_line(ring[i], ring[i + 1], Color(tint, 0.85), 2, true)
+		if _has_valid_poly_area(ring):
+			draw_colored_polygon(ring, Color(tint, 0.10))
+		for i in range(ring.size()):
+			var p1 = ring[i]
+			var p2 = ring[(i + 1) % ring.size()]
+			if confirmed or i % 4 < 2: draw_line(p1, p2, Color(tint, 0.85), 2, true)
 			
 		var middle = screen(center + Vector3.UP)
 		label_rects.append(Rect2(middle - Vector2(14, 14), Vector2(28, 28)))
