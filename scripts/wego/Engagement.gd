@@ -18,6 +18,12 @@ const CombatEffects = preload("res://scripts/wego/CombatEffects.gd")
 const WorldPlanningGraphics = preload("res://scripts/wego/WorldPlanningGraphics.gd")
 const AmmunitionData = preload("res://scripts/wego/AmmunitionData.gd")
 const VehicleConfig = preload("res://scripts/wego/VehicleConfig.gd")
+const GunnerReticleOverlay = preload("res://scripts/wego/GunnerReticleOverlay.gd")
+const GunnerSightSystem = preload("res://scripts/wego/GunnerSightSystem.gd")
+
+var view_mode: String = "TACTICAL"
+var gunner_overlay: GunnerReticleOverlay
+var gunner_sight_btn: Button
 
 var world_graphics: WorldPlanningGraphics
 var ghost_tank: A47_Mastodon_Vehicle
@@ -205,6 +211,8 @@ func _ready() -> void:
 	enemy.doctrine = CrewDoctrine.new()
 	enemy.track = enemy_track
 	add_child(enemy)
+	player.target_vehicle = enemy
+	enemy.target_vehicle = player
 
 	setup_spawn_positions(preferred_enemy_spawn_distance)
 	
@@ -422,6 +430,9 @@ func _build_ui() -> void:
 	battlefield_overlay = Overlay.new()
 	battlefield_overlay.game = self
 	root.add_child(battlefield_overlay)
+	gunner_overlay = GunnerReticleOverlay.new()
+	root.add_child(gunner_overlay)
+	gunner_overlay.visible = false
 	var left = _panel(root, 0, 0, 0.19, 1.0)
 	left_drawer = left.get_parent().get_parent()
 	var left_header = HBoxContainer.new()
@@ -574,8 +585,8 @@ func _build_ui() -> void:
 	right_close.pressed.connect(func(): right_drawer.visible = false)
 	right_header.add_child(right_close)
 	contact_label = _label(right, "", 12)
-	contact_fire_button = _button(right, "FIRE AT ESTIMATE", _queue_contact_fire, 32)
-	contact_fire_button.tooltip_text = "Queue a shot at the marked estimate."
+	contact_fire_button = _button(right, "SLEW TURRET TO CONTACT [G]", _slew_to_contact_and_aim, 32)
+	contact_fire_button.tooltip_text = "Slews turret toward Contact A estimate and switches to Gunner Sight."
 	detail_tabs = TabBar.new()
 	detail_tabs.add_theme_font_size_override("font_size", 12)
 	for title in ["HELP", "SHOT", "CREW", "TURN"]: detail_tabs.add_tab(title)
@@ -728,9 +739,10 @@ func _build_ui() -> void:
 	tank_card_label.add_theme_color_override("font_color", Color("8cddf0"))
 
 	# Bottom-right HUD Toolbar for quick drawer toggles
-	var toolbar_box = _hud_bar(root, 0.77, 0.94, 0.99, 1.0)
+	var toolbar_box = _hud_bar(root, 0.69, 0.94, 0.99, 1.0)
 	var toolbar_row = HBoxContainer.new()
 	toolbar_box.add_child(toolbar_row)
+	gunner_sight_btn = _button(toolbar_row, "SIGHT [G]", _toggle_gunner_view, 24)
 	drawer_orders_btn = _button(toolbar_row, "ORDERS", func(): left_drawer.visible = not left_drawer.visible, 24)
 	drawer_crew_btn = _button(toolbar_row, "CREW", func():
 		right_drawer.visible = true
@@ -904,6 +916,77 @@ func _queue_scan() -> void:
 	order_notice = "Scan queued: sweep searchlight forward to search for contacts."
 	_append_action("scan", _planned_aim())
 	_log("SCAN appended. The light can reveal your position.")
+
+func _slew_to_contact_and_aim() -> void:
+	if not _can_edit_orders() or display_contact.is_empty(): return
+	if player != null and player.gunner_sight != null and player_track != null:
+		player.gunner_sight.slew_to_contact(player_track)
+		fields.bearing.value = fposmod(rad_to_deg(atan2(player_track.estimated_position.x - player.position.x, -(player_track.estimated_position.z - player.position.z))), 360.0)
+		fields.range.value = player_track.estimated_range
+		_enter_gunner_view()
+		_callout("Commander", "TARGET DESIGNATED! Gunner, slew on bearing %03d°!" % int(player_track.estimated_bearing_deg))
+		_event("COMMANDER: Turret slewing toward contact estimate (%03d°)." % int(player_track.estimated_bearing_deg))
+
+func _toggle_gunner_view() -> void:
+	if view_mode == "TACTICAL":
+		_enter_gunner_view()
+	else:
+		_exit_gunner_view()
+
+func _enter_gunner_view() -> void:
+	if not is_instance_valid(player) or player.gunner_sight == null: return
+	view_mode = "GUNNER"
+	player.gunner_sight.set_active(true)
+	camera.current = false
+	if gunner_overlay != null:
+		gunner_overlay.set_systems(player.gunner_sight, player, player_track)
+		gunner_overlay.visible = true
+	if battlefield_overlay != null:
+		battlefield_overlay.visible = false
+	if left_drawer != null: left_drawer.visible = false
+	if right_drawer != null: right_drawer.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_callout("Gunner", "ON SIGHT! Aperture open at %dm." % int(player.gunner_sight.sight_range_m))
+
+func _exit_gunner_view() -> void:
+	if not is_instance_valid(player): return
+	view_mode = "TACTICAL"
+	if player.gunner_sight != null:
+		player.gunner_sight.set_active(false)
+	if camera != null:
+		camera.current = true
+	if gunner_overlay != null:
+		gunner_overlay.visible = false
+	if battlefield_overlay != null:
+		battlefield_overlay.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _toggle_fire_policy() -> void:
+	if player == null or player.gunner_sight == null: return
+	if player.gunner_sight.fire_policy == GunnerSightSystem.FirePolicy.FIRE_WHEN_STABLE:
+		player.gunner_sight.fire_policy = GunnerSightSystem.FirePolicy.FIRE_ASAP
+		_callout("Gunner", "POLICY: ASAP (FIRE IMMEDIATELY UPON TRIGGER)")
+		_event("GUNNER: Fire policy set to FIRE ASAP.")
+	else:
+		player.gunner_sight.fire_policy = GunnerSightSystem.FirePolicy.FIRE_WHEN_STABLE
+		_callout("Gunner", "POLICY: WHEN STABLE (WAIT FOR GUN SETTLING)")
+		_event("GUNNER: Fire policy set to FIRE WHEN STABLE.")
+
+func _queue_gunner_fire() -> void:
+	if not _can_edit_orders() or not player.model.can_fire(): return
+	fields.fire.button_pressed = true
+	player.orders["fire"] = true
+	player.orders["sight_range"] = player.gunner_sight.sight_range_m
+	player.orders["commanded_yaw"] = player.gunner_sight.commanded_yaw
+	player.orders["commanded_pitch"] = player.gunner_sight.commanded_pitch
+	player.orders["fire_policy"] = player.gunner_sight.fire_policy
+	var aim_target_point = player.position + player.gunner_sight.get_commanded_aim_vector() * player.gunner_sight.sight_range_m
+	_append_action("fire", aim_target_point)
+	_callout("Gunner", "FIRE QUEUED at %dm (%s)!" % [
+		int(player.gunner_sight.sight_range_m),
+		"WHEN STABLE" if player.gunner_sight.fire_policy == GunnerSightSystem.FirePolicy.FIRE_WHEN_STABLE else "ASAP"
+	])
+	_event("GUNNER: Fire order queued at %dm." % int(player.gunner_sight.sight_range_m))
 
 func _queue_contact_fire() -> void:
 	if not _can_edit_orders() or display_contact.is_empty(): return
@@ -1374,6 +1457,14 @@ func _fire(tank) -> void:
 	if tank == player and player.doctrine_fire_authorized and not fields.fire.button_pressed and player_firing_solution != null:
 		dir = player_firing_solution.compute_shell_direction(origin, rng)
 		range_m = player_firing_solution.range_m
+	elif tank.gunner_sight != null:
+		# Authentic gunnery: launch shell along physical bore orientation!
+		dir = tank.gunner_sight.get_bore_vector()
+		range_m = tank.gunner_sight.sight_range_m
+		var cone = tank.gunner_sight.calculate_dispersion(ammo)
+		var right = dir.cross(Vector3.UP).normalized()
+		var up = right.cross(dir).normalized()
+		dir = (dir + right * rng.randfn(0, cone) + up * rng.randfn(0, cone)).normalized()
 	else:
 		var aim: Vector3
 		if tank.orders.has("aim_point"):
@@ -1491,6 +1582,19 @@ func _step_shells(delta: float) -> void:
 				var splash_rel = imp_res.get("impact_observation", "")
 				if splash_rel != null and not splash_rel.is_empty() and splash_rel != "HIT":
 					player_track.apply_observed_impact(splash_rel)
+					_callout("Gunner", "SPLASH %s! Range adjusted." % splash_rel)
+					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
+			remove = true
+		elif finish.y <= 0.0:
+			CombatEffects.spawn_impact_fx(self, Vector3(finish.x, 0.0, finish.z), Vector3.UP, "GROUND_MISS")
+			_set_shot_result(shell.id, finish, "MISS • GROUND SPLASH", "Ground", false)
+			_event("Shot #%02d: %s → GROUND SPLASH." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
+			if shell.shooter == player and player_track != null and contact_is_visible():
+				var imp_res = sensor_model.evaluate(player, enemy, get_world_3d(), sim_time, false, Vector3(finish.x, 0.0, finish.z))
+				var splash_rel = imp_res.get("impact_observation", "")
+				if splash_rel != null and not splash_rel.is_empty() and splash_rel != "HIT":
+					player_track.apply_observed_impact(splash_rel)
+					_callout("Gunner", "SPLASH %s! Range adjusted." % splash_rel)
 					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
 			remove = true
 		shell.distance += segment
@@ -1679,7 +1783,12 @@ func _process(delta: float) -> void:
 		]
 
 	var visible_contact = contact_is_visible()
-	enemy.visible = visible_contact
+	if view_mode == "GUNNER":
+		enemy.visible = player.gunner_sight != null and player.gunner_sight.target_has_los
+		if ghost_tank != null: ghost_tank.visible = false
+		if gunner_overlay != null: gunner_overlay.queue_redraw()
+	else:
+		enemy.visible = visible_contact
 
 	if player_track != null and player_track.has_contact() and not display_contact.is_empty():
 		var age = sim_time - player_track.last_observation_time
@@ -1707,7 +1816,9 @@ func _process(delta: float) -> void:
 	
 	# Update in-world 3D Ghost Tank
 	if ghost_tank != null:
-		if not visible_contact and player_track != null and player_track.has_silhouette:
+		if view_mode == "GUNNER":
+			ghost_tank.visible = false
+		elif not visible_contact and player_track != null and player_track.has_silhouette:
 			ghost_tank.visible = true
 			ghost_tank.position = player_track.silhouette_position
 			ghost_tank.rotation.y = player_track.silhouette_yaw
@@ -1753,8 +1864,47 @@ func _log(message: String) -> void:
 	if event_log: event_log.text = "\n".join(log_lines)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if view_mode == "GUNNER":
+		if event is InputEventMouseMotion:
+			if is_instance_valid(player) and player.gunner_sight != null:
+				player.gunner_sight.apply_mouse_input(event.relative)
+			return
+		elif event is InputEventMouseButton and event.pressed:
+			if is_instance_valid(player) and player.gunner_sight != null:
+				if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+					var step_m = 10.0 if Input.is_key_pressed(KEY_SHIFT) else 50.0
+					player.gunner_sight.adjust_sight_range(step_m)
+					return
+				elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+					var step_m = 10.0 if Input.is_key_pressed(KEY_SHIFT) else 50.0
+					player.gunner_sight.adjust_sight_range(-step_m)
+					return
+				elif event.button_index == MOUSE_BUTTON_LEFT:
+					_queue_gunner_fire()
+					return
+				elif event.button_index == MOUSE_BUTTON_RIGHT:
+					_toggle_fire_policy()
+					return
+		elif event is InputEventKey and event.pressed:
+			if event.keycode in [KEY_ESCAPE, KEY_G]:
+				_exit_gunner_view()
+				return
+			elif event.keycode == KEY_SPACE:
+				_queue_gunner_fire()
+				return
+			elif event.keycode == KEY_P:
+				_toggle_fire_policy()
+				return
+			elif event.keycode == KEY_TAB:
+				_exit_gunner_view()
+				return
+		return
+
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_F3:
+		if event.keycode == KEY_G:
+			_enter_gunner_view()
+			return
+		elif event.keycode == KEY_F3:
 			debug_overlay_enabled = not debug_overlay_enabled
 			player.set_debug_visuals(debug_overlay_enabled)
 			enemy.set_debug_visuals(debug_overlay_enabled)

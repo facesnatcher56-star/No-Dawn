@@ -37,6 +37,11 @@ var doctrine_fire_authorized: bool = false
 var doctrine_halt: bool = false
 var doctrine_reversing: bool = false
 const CrewObserver = preload("res://scripts/wego/CrewObserver.gd")
+const GunnerSightSystem = preload("res://scripts/wego/GunnerSightSystem.gd")
+
+var gunner_sight: GunnerSightSystem
+var current_gun_pitch: float = 0.0
+var target_vehicle = null
 
 var observers: Dictionary = {}
 var obs_commander: CrewObserver
@@ -48,6 +53,7 @@ var designated_target_pos: Variant = null
 
 func _init() -> void:
 	doctrine = CrewDoctrine.new()
+	gunner_sight = GunnerSightSystem.new(self)
 	obs_commander = CrewObserver.new(CrewObserver.Role.COMMANDER, "Commander")
 	obs_gunner = CrewObserver.new(CrewObserver.Role.GUNNER, "Gunner")
 	obs_loader = CrewObserver.new(CrewObserver.Role.LOADER, "Loader")
@@ -228,6 +234,24 @@ func commit(plan: Dictionary) -> void:
 	doctrine_reversing = false
 	elapsed = 0
 	engine_on = orders.get("engine", true)
+	if gunner_sight != null:
+		if orders.has("sight_range"):
+			gunner_sight.sight_range_m = orders.sight_range
+		if orders.has("fire_policy"):
+			gunner_sight.fire_policy = orders.fire_policy
+		if orders.has("commanded_yaw"):
+			gunner_sight.commanded_yaw = orders.commanded_yaw
+			gunner_sight.commanded_pitch = orders.get("commanded_pitch", 0.0)
+		elif orders.has("aim_point"):
+			var offset: Vector3 = orders.aim_point - position
+			gunner_sight.commanded_yaw = -atan2(offset.x, -offset.z)
+			var dist = offset.length()
+			var dy = (orders.aim_point.y + orders.get("height", 1.4)) - (position.y + 2.4)
+			gunner_sight.commanded_pitch = clampf(atan2(dy, maxf(dist, 1.0)), GunnerSightSystem.MIN_ELEVATION_RAD, GunnerSightSystem.MAX_ELEVATION_RAD)
+		elif orders.get("tracking_contact", false) and track != null:
+			gunner_sight.slew_to_contact(track)
+		elif orders.has("bearing"):
+			gunner_sight.commanded_yaw = deg_to_rad(-orders.bearing)
 
 func step(delta: float) -> void:
 	elapsed += delta
@@ -273,27 +297,32 @@ func step(delta: float) -> void:
 	previous_speed = speed
 	previous_yaw = rotation.y
 
-	# Traverse in world space so a hull pivot does not drag the gun off bearing (counter-rotation).
-	var trav_rate = deg_to_rad(config.turret_traverse_speed_deg) if config != null else 0.5
-	model.turret_yaw = rotate_toward(world_turret_yaw, gun_goal_yaw(), delta * trav_rate) - rotation.y
-	if turret != null:
-		turret.rotation.y = model.turret_yaw
+	# Update gunner sight (turret traverse, gun elevation, settling, line-of-sight acquisition)
+	if gunner_sight != null:
+		if orders.get("tracking_contact", false) and track != null:
+			gunner_sight.slew_to_contact(track)
+		elif orders.has("aim_point") and not orders.has("commanded_yaw"):
+			var offset: Vector3 = orders.aim_point - position
+			gunner_sight.commanded_yaw = -atan2(offset.x, -offset.z)
+			var dist = offset.length()
+			var dy = (orders.aim_point.y + orders.get("height", 1.4)) - (position.y + 2.4)
+			gunner_sight.commanded_pitch = clampf(atan2(dy, maxf(dist, 1.0)), GunnerSightSystem.MIN_ELEVATION_RAD, GunnerSightSystem.MAX_ELEVATION_RAD)
+			
+		var space_world = get_world_3d() if is_inside_tree() else null
+		gunner_sight.update_step(delta, target_vehicle, space_world)
+		current_gun_pitch = gunner_sight.current_bore_pitch
+	else:
+		var trav_rate = deg_to_rad(config.turret_traverse_speed_deg) if config != null else 0.5
+		model.turret_yaw = rotate_toward(world_turret_yaw, gun_goal_yaw(), delta * trav_rate) - rotation.y
+		if turret != null:
+			turret.rotation.y = model.turret_yaw
 
 	# Synchronize visual 3D Mastodon tank model
 	if visual_tank != null:
 		visual_tank.rotate_turret(model.turret_yaw)
+		visual_tank.elevate_gun(current_gun_pitch)
 		visual_tank.set_wheel_speed(speed * 3.5)
 		visual_tank.set_commander_exposed(orders.get("observe", true) and not model.catastrophic)
-		if orders.has("aim_point"):
-			var dist = position.distance_to(orders.aim_point)
-			var dy = (orders.aim_point.y + orders.get("height", 1.4)) - (position.y + 2.4)
-			var pitch = -atan2(dy, maxf(dist, 1.0))
-			visual_tank.elevate_gun(clampf(pitch, deg_to_rad(-8.0), deg_to_rad(20.0)))
-		elif orders.get("tracking_contact", false) and track != null:
-			var dist = position.distance_to(track.estimated_position)
-			var dy = (track.estimated_position.y + 1.4) - (position.y + 2.4)
-			var pitch = -atan2(dy, maxf(dist, 1.0))
-			visual_tank.elevate_gun(clampf(pitch, deg_to_rad(-8.0), deg_to_rad(20.0)))
 		visual_tank.anim.update(delta)
 
 	# Synchronize crew observer optical orientations & status
@@ -325,6 +354,8 @@ func step(delta: float) -> void:
 			clear_designation()
 
 func gun_goal_yaw() -> float:
+	if gunner_sight != null:
+		return gunner_sight.commanded_yaw
 	if orders.has("aim_point"):
 		var offset: Vector3 = orders.aim_point - position
 		return -atan2(offset.x, -offset.z)
@@ -363,12 +394,14 @@ func get_observer_status_lines() -> Array[String]:
 	return lines
 
 func ready_to_shoot() -> bool:
-	var target_yaw = gun_goal_yaw()
 	var can_trigger = (shot_pending or doctrine_fire_authorized)
 	var loaded = model.reload <= 0 and model.can_fire()
-	var aimed = absf(angle_difference(rotation.y + model.turret_yaw, target_yaw)) < 0.04
+	var aimed = gunner_sight.is_bore_aligned() if gunner_sight != null else absf(angle_difference(rotation.y + model.turret_yaw, gun_goal_yaw())) < 0.04
 	if not (can_trigger and elapsed > 0.4 and loaded and aimed):
 		return false
+	if gunner_sight != null and gunner_sight.fire_policy == GunnerSightSystem.FirePolicy.FIRE_WHEN_STABLE:
+		if gunner_sight.settling_state != GunnerSightSystem.SettlingState.STABLE and elapsed < 4.0:
+			return false
 	# If vehicle is completely unstabilized, firing while moving at speed is prohibited by doctrine
 	if config != null and config.gun_stabilization == "NONE" and speed > 0.5:
 		return false
