@@ -6,18 +6,42 @@ const Playback = preload("res://scripts/wego/CombatPlayback.gd")
 const Actions = preload("res://scripts/wego/ActionQueue.gd")
 const Damage = preload("res://scripts/wego/DamageReport.gd")
 const Armor = preload("res://scripts/wego/ArmorModel.gd")
+
+const ContactTrack = preload("res://scripts/wego/ContactTrack.gd")
+const Observation = preload("res://scripts/wego/Observation.gd")
+const SensorModel = preload("res://scripts/wego/SensorModel.gd")
+const FiringSolution = preload("res://scripts/wego/FiringSolution.gd")
+const CrewDoctrine = preload("res://scripts/wego/CrewDoctrine.gd")
+const WegoTimeline = preload("res://scripts/wego/WegoTimeline.gd")
+
 var player
 var enemy
 var camera: Camera3D
 var phase = "PLANNING"
 var turn = 1
-var active_tank
-var time_left = 5.0
+var active_tank = null
+var time_left = 8.0
 var sim_time = 0.0
 var sense_timer = 0.0
 var shells: Array = []
 var records: Array = []
 var rng = RandomNumberGenerator.new()
+
+var timeline = null
+var sensor_model = null
+var player_track = null
+var enemy_track = null
+var player_firing_solution = null
+var debug_overlay_enabled: bool = false
+var recent_gunfire_time: float = -999.0
+var recent_hit_time: float = -999.0
+var player_was_hit_this_pulse: bool = false
+var enemy_was_hit_this_pulse: bool = false
+var pulse_mode_label: Label
+var sop_contact_choice: OptionButton
+var sop_fired_choice: OptionButton
+var sop_fire_auth_choice: OptionButton
+
 var status_label: Label
 var contact_label: Label
 var crew_label: Label
@@ -91,17 +115,27 @@ var using_queue = false
 
 func _ready() -> void:
 	rng.seed = 94217
+	timeline = WegoTimeline.new()
+	player_track = ContactTrack.new("CONTACT_A")
+	enemy_track = ContactTrack.new("PLAYER_TANK")
+	sensor_model = SensorModel.new(rng)
 	player = Vehicle.new()
 	player.name = "Your tank"
 	player.position = Vector3(-185, 0, 110)
 	player.rotation.y = -PI / 2
+	player.doctrine = CrewDoctrine.new()
+	player.track = player_track
 	add_child(player)
+	
 	enemy = Vehicle.new()
 	enemy.name = "Contact A"
 	enemy.position = Vector3(-110, 0, 110)
 	enemy.rotation.y = PI / 2
 	enemy.color = Color("736752")
+	enemy.doctrine = CrewDoctrine.new()
+	enemy.track = enemy_track
 	add_child(enemy)
+	
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = zoom
@@ -109,12 +143,32 @@ func _ready() -> void:
 	camera.current = true
 	_build_ui()
 	_set_map_running(false)
-	# The two crews start with an imprecise briefing, not the opponent's coordinates.
-	player.contact = {"position": Vector3(-108, 0, 105), "uncertainty": 22.0, "time": 0.0, "source": "Briefing / unconfirmed", "bearing": 90.0, "arc": 16.0}
-	enemy.contact = {"position": Vector3(-180, 0, 120), "uncertainty": 25.0, "time": 0.0, "source": "Briefing", "bearing": 270.0, "arc": 16.0}
+	
+	# Initial contact tracks set up from reconnaissance briefing
+	player_track.estimated_position = Vector3(-108, 0, 105)
+	player_track.last_observed_position = player_track.estimated_position
+	player_track.position_uncertainty = 35.0
+	player_track.range_uncertainty = 35.0
+	player_track.estimated_range = player.position.distance_to(player_track.estimated_position)
+	player_track.estimated_bearing_deg = 90.0
+	player_track.last_observation_time = 0.0
+	player_track.sources = ["Briefing / unconfirmed"]
+	player.contact = player_track.to_dict()
+	
+	enemy_track.estimated_position = Vector3(-180, 0, 120)
+	enemy_track.last_observed_position = enemy_track.estimated_position
+	enemy_track.position_uncertainty = 35.0
+	enemy_track.range_uncertainty = 35.0
+	enemy_track.estimated_range = enemy.position.distance_to(enemy_track.estimated_position)
+	enemy_track.estimated_bearing_deg = 270.0
+	enemy_track.last_observation_time = 0.0
+	enemy_track.sources = ["Briefing"]
+	enemy.contact = enemy_track.to_dict()
+	
+	player_firing_solution = FiringSolution.calculate(player, player_track, rng)
 	_publish_contact()
 	contact_visual_position = display_contact.position
-	_log("Systems operational. Standing by for orders.")
+	_log("Systems operational. Tactical WEGO initialized.")
 
 func _set_map_running(enabled: bool) -> void:
 	map_scripts.clear()
@@ -248,6 +302,8 @@ func _build_ui() -> void:
 	root.add_child(overlay)
 	var left = _panel(root, 0, 0, 0.22, 1.0)
 	_label(left, "ORDERS", 18)
+	pulse_mode_label = _label(left, "MANEUVER MODE (8.0s pulse)", 12)
+	pulse_mode_label.add_theme_color_override("font_color", Color("8cddf0"))
 	status_label = _label(left, "", 13)
 	var actions = HBoxContainer.new()
 	left.add_child(actions)
@@ -328,6 +384,44 @@ func _build_ui() -> void:
 	ammo_choice.add_item("25 rounds / protected storage")
 	ammo_choice.add_item("40 rounds / overflow rack filled")
 	advanced.add_child(ammo_choice)
+	
+	_label(advanced, "CREW DOCTRINE (SOP)", 13)
+	_label(advanced, "On Contact:", 11)
+	sop_contact_choice = OptionButton.new()
+	sop_contact_choice.add_item("Halt & Track Target")
+	sop_contact_choice.add_item("Continue & Track")
+	sop_contact_choice.add_item("Reverse to Cover")
+	sop_contact_choice.add_item("Hold Current Orders")
+	sop_contact_choice.add_item("Remain Concealed")
+	sop_contact_choice.item_selected.connect(func(idx):
+		if player != null and player.doctrine != null:
+			player.doctrine.on_contact = idx as CrewDoctrine.ContactReaction)
+	advanced.add_child(sop_contact_choice)
+	controls.append(sop_contact_choice)
+	
+	_label(advanced, "When Fired Upon:", 11)
+	sop_fired_choice = OptionButton.new()
+	sop_fired_choice.add_item("Halt Immediately")
+	sop_fired_choice.add_item("Reverse Away")
+	sop_fired_choice.add_item("Seek Cover")
+	sop_fired_choice.add_item("Continue Orders")
+	sop_fired_choice.item_selected.connect(func(idx):
+		if player != null and player.doctrine != null:
+			player.doctrine.on_fired_upon = idx as CrewDoctrine.FiredUponReaction)
+	advanced.add_child(sop_fired_choice)
+	controls.append(sop_fired_choice)
+	
+	_label(advanced, "Fire Authority:", 11)
+	sop_fire_auth_choice = OptionButton.new()
+	sop_fire_auth_choice.add_item("Hold Fire (Player Order Only)")
+	sop_fire_auth_choice.add_item("Confirmed Hostile Only")
+	sop_fire_auth_choice.add_item("Fire When Solution Ready")
+	sop_fire_auth_choice.add_item("Return Fire When Attacked")
+	sop_fire_auth_choice.item_selected.connect(func(idx):
+		if player != null and player.doctrine != null:
+			player.doctrine.fire_authority = idx as CrewDoctrine.FireAuthority)
+	advanced.add_child(sop_fire_auth_choice)
+	controls.append(sop_fire_auth_choice)
 	_button(left, "Restart engagement", func(): get_tree().reload_current_scene(), 26)
 	controls.pop_back()
 	controls.erase(advanced_toggle)
@@ -457,7 +551,7 @@ func _build_ui() -> void:
 	event_log.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 func _can_edit_orders() -> bool:
-	return phase not in ["EXECUTION", "COMPLETE"] or (phase == "EXECUTION" and active_tank == player and time_left > 0.0001 and playback.paused and not playback.busy())
+	return phase not in ["EXECUTION", "COMPLETE"] or (phase == "EXECUTION" and time_left > 0.0001 and playback.paused and not playback.busy())
 
 func _set_order_controls(enabled: bool) -> void:
 	for control in controls:
@@ -468,7 +562,7 @@ func _set_order_controls(enabled: bool) -> void:
 		row.limit.editable = enabled
 
 func _stop_and_edit() -> void:
-	if phase != "EXECUTION" or active_tank != player or playback.busy() or time_left <= 0.0001: return
+	if phase != "EXECUTION" or playback.busy() or time_left <= 0.0001: return
 	playback.paused = true
 	playback.accumulator = 0.0
 	_world_playback_rate(0)
@@ -541,13 +635,12 @@ func _rebuild_queue() -> void:
 func _refresh_queue() -> void:
 	if budget_label == null: return
 	queue_scroll.visible = not action_queue.actions.is_empty()
-	var budget = time_left if phase == "EXECUTION" and active_tank == player else 5.0
+	var budget = time_left if phase == "EXECUTION" else (timeline.pulse_duration if timeline else 5.0)
 	var estimates = action_queue.estimates(player)
 	var total: float = estimates.back().end if not estimates.is_empty() else 0.0
 	var committed = minf(total, budget)
 	budget_label.text = "Budget: %.1fs (Queued: %.1fs)" % [budget, committed]
-	if phase == "EXECUTION" and active_tank == enemy: budget_label.text = "Enemy Turn • 5.0s budget next"
-	elif total > budget: budget_label.text += " • Spills over"
+	if total > budget: budget_label.text += " • Spills over"
 	var reload_time = Actions.reload_seconds(player)
 	reload_label.text = "Gun Ready • %d rnds" % player.model.rounds if reload_time <= 0 else "Reload: %.1fs • %d rnds" % [reload_time, player.model.rounds]
 	if not player.model.can_fire(): reload_label.text = "Gun Unavailable"
@@ -565,7 +658,7 @@ func _refresh_queue() -> void:
 		row.label.add_theme_color_override("font_color", Color("efc477") if estimate.end > budget else Color("8cddf0"))
 		row.cancel.disabled = not _can_edit_orders()
 		row.limit.editable = _can_edit_orders()
-	stop_button.disabled = phase != "EXECUTION" or active_tank != player or playback.busy() or time_left <= 0.0001
+	stop_button.disabled = phase != "EXECUTION" or playback.busy() or time_left <= 0.0001
 	stop_button.text = "EDITING · PAUSED" if _can_edit_orders() and phase == "EXECUTION" else "STOP / EDIT"
 
 func _set_mode(mode: String) -> void:
@@ -634,7 +727,7 @@ func _queue_move(point: Vector3) -> void:
 	query.collision_mask = 1
 	query.margin = 0.1
 	var fractions = get_world_3d().direct_space_state.cast_motion(query)
-	if fractions[0] < 0.99:
+	if fractions.is_empty() or fractions[0] < 0.99:
 		order_notice = "Route blocked by cover. Choose clear ground or move around the building in shorter steps."
 		_log(order_notice)
 		return
@@ -684,29 +777,85 @@ func _execute() -> void:
 	playback.accumulator = 0.0
 	playback.paused = false
 	playback.shot_focus = 0.0
-	active_tank = player
+	active_tank = null # True simultaneous execution: no single active tank!
+	player_was_hit_this_pulse = false
+	enemy_was_hit_this_pulse = false
+	
 	using_queue = not action_queue.actions.is_empty()
 	action_queue.running = false
 	if using_queue:
 		player.orders["extinguish"] = plan.extinguish
 		action_queue.start(player)
-	else: player.commit(plan)
+	else:
+		player.commit(plan)
 	input_mode = "select"
 	order_notice = ""
-	# AI plans from its own last observation; orders wait for its action.
-	var believed: Vector3 = enemy.contact.get("position", enemy.position + Vector3(-70, 0, 0))
-	var offset = believed - enemy.position
-	enemy.commit({"move": 0.0 if turn % 3 != 0 else -8.0, "pivot": 0.0, "bearing": fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360), "range": offset.length(), "height": 1.45, "fire": turn > 1, "engine": true, "observe": true, "light": turn % 4 == 0, "extinguish": enemy.model.burning})
+	
+	# AI plans simultaneously from its own ContactTrack (NO cheat access to player truth!)
+	_plan_ai()
+	
+	# Determine pulse length based on contact status (8s Maneuver vs 3s Combat)
+	var direct_engagement = plan.get("fire", false)
+	if using_queue:
+		for a in action_queue.actions:
+			if a.kind == "fire":
+				direct_engagement = true
+				break
+	var p_mode = timeline.evaluate_mode(
+		player_track,
+		enemy_track,
+		sim_time - recent_gunfire_time < 8.0,
+		sim_time - recent_hit_time < 8.0,
+		direct_engagement
+	)
+	timeline.start_pulse(p_mode)
+	time_left = timeline.pulse_duration
+	if pulse_mode_label != null:
+		var mode_name = "COMBAT" if p_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER"
+		pulse_mode_label.text = "%s MODE (%.0fs pulse)" % [mode_name, timeline.pulse_duration]
+		pulse_mode_label.add_theme_color_override("font_color", Color("ff9b86") if p_mode == WegoTimeline.PulseMode.COMBAT else Color("8cddf0"))
+		
 	_set_map_running(true)
 	phase = "EXECUTION"
-	_event("YOUR TURN: execute orders, then the enemy responds.")
-	if plan.has("destination"): _event("YOU: move %.0f m toward the marked destination." % player.position.distance_to(plan.destination))
-	if plan.light: _event("YOU: scan with searchlight for the first 2 simulated seconds.")
-	time_left = 5
+	_event("SIMULTANEOUS EXECUTION (%s, %.0fs): Both sides acting." % ["COMBAT" if p_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER", timeline.pulse_duration])
+	if plan.has("destination"): _event("YOU: advancing toward destination.")
+	if plan.light: _event("YOU: sweeping searchlight for 2 seconds.")
+	
 	execute_button.disabled = true
 	for control in controls:
 		if control is SpinBox: control.editable = false
 		elif control is BaseButton: control.disabled = true
+
+func _plan_ai() -> void:
+	if enemy == null or enemy.model.catastrophic: return
+	var ai_plan: Dictionary = {
+		"move": 0.0,
+		"pivot": 0.0,
+		"bearing": 270.0,
+		"range": 75.0,
+		"height": 1.45,
+		"fire": false,
+		"engine": true,
+		"observe": true,
+		"light": turn % 4 == 0,
+		"extinguish": enemy.model.burning
+	}
+	
+	if enemy_track != null:
+		var offset = enemy_track.estimated_position - enemy.position
+		ai_plan["range"] = maxf(10.0, offset.length())
+		ai_plan["bearing"] = fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360.0)
+		
+		# If AI has confirmed visual or tight track, it calculates moving lead and fires
+		if enemy_track.has_visual_los or enemy_track.range_uncertainty < 35.0:
+			var ai_sol = FiringSolution.calculate(enemy, enemy_track, rng)
+			ai_plan["aim_point"] = ai_sol.predicted_target_position
+			ai_plan["fire"] = turn > 1 and enemy.model.can_fire()
+			
+		# AI patrol maneuvers when out of contact
+		if turn % 3 == 0 and not enemy_track.has_visual_los:
+			ai_plan["move"] = -8.0
+	enemy.commit(ai_plan)
 
 func _physics_process(delta: float) -> void:
 	if phase != "EXECUTION": return
@@ -717,7 +866,6 @@ func _physics_process(delta: float) -> void:
 		viewer.seek(playback.replay_time)
 		_refresh_impact()
 		_world_playback_rate(0)
-		# Hold the completed damage assessment until explicitly acknowledged.
 		return
 	if not playback.pending.is_empty():
 		_begin_impact()
@@ -742,51 +890,101 @@ func _simulation_step(delta: float) -> void:
 	var dt = minf(delta, time_left) if acting else delta
 	sim_time += dt
 	time_left = maxf(0, time_left - dt)
+	timeline.sim_time = sim_time
+	timeline.pulse_time_left = time_left
 	for node in map_scripts: node.call("_process", dt)
-	# Only the active crew advances orders and reloads. Resolve late shells
-	# before handing control to the other tank.
+	
 	if acting:
-		if active_tank == player and using_queue: action_queue.start(player)
-		active_tank.step(dt)
-		if active_tank.ready_to_shoot(): _fire(active_tank)
-		if active_tank == player and using_queue:
+		# 1. Advance Player Orders
+		if using_queue: action_queue.start(player)
+		player.step(dt)
+		if using_queue:
 			var completed = action_queue.advance(player, dt)
 			if not completed.is_empty():
 				_event("YOU: " + completed)
 				_sync_queue_markers()
 				_rebuild_queue()
+				
+		# 2. Advance Enemy SIMULTANEOUSLY!
+		enemy.step(dt)
+		
+		# 3. Evaluate Standing Orders (SOP) based strictly on possessed info
+		var p_react = player.doctrine.evaluate(
+			player,
+			player_track,
+			player_was_hit_this_pulse,
+			sim_time - recent_gunfire_time < 2.0,
+			player_firing_solution.solution_quality if player_firing_solution else "POOR"
+		)
+		if p_react.halt_movement: player.doctrine_halt = true
+		if p_react.reverse_movement: player.doctrine_reversing = true
+		if p_react.fire_authorized: player.doctrine_fire_authorized = true
+		if not p_react.notice.is_empty() and player.elapsed < dt * 2.0:
+			_event(p_react.notice)
+			
+		var e_react = enemy.doctrine.evaluate(
+			enemy,
+			enemy_track,
+			enemy_was_hit_this_pulse,
+			sim_time - recent_gunfire_time < 2.0,
+			"ACQUIRED"
+		)
+		if e_react.halt_movement: enemy.doctrine_halt = true
+		if e_react.reverse_movement: enemy.doctrine_reversing = true
+		if e_react.fire_authorized: enemy.doctrine_fire_authorized = true
+		
+		# 4. Simultaneous Firing Checks: both tanks may fire during the same timeline
+		if player.ready_to_shoot(): _fire(player)
+		if enemy.ready_to_shoot(): _fire(enemy)
+		
+	# 5. Shell Physics & Collisions
 	_step_shells(dt)
+	
+	# 6. Sensors & Intelligence Update
 	sense_timer += dt
-	if sense_timer >= 0.5:
-		sense_timer = 0
-		_sense(player, enemy)
-		_sense(enemy, player)
-
-func _engagement_over() -> bool:
-	for tank in [player, enemy]:
-		if tank.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"]: return true
-	return false
+	if sense_timer >= 0.25:
+		var s_dt = sense_timer
+		sense_timer = 0.0
+		_evaluate_sensors(s_dt)
 
 func _finish_execution() -> void:
 	if phase != "EXECUTION" or playback.busy() or not shells.is_empty(): return
-	if active_tank == player and not _engagement_over():
-		player.lamp.visible = false
-		player.muzzle_flash.visible = false
-		player.flash = 0
-		action_queue.running = false
-		active_tank = enemy
-		time_left = 5.0
-		playback.accumulator = 0.0
-		playback.shot_focus = 0.0
-		_event("ENEMY TURN: Contact A executes its orders.")
-		return
+	timeline.complete_pulse()
 	_set_map_running(false)
 	phase = "ASSESSMENT"
 	turn += 1
 	player.lamp.visible = false
 	enemy.lamp.visible = false
+	player.muzzle_flash.visible = false
+	enemy.muzzle_flash.visible = false
+	player.flash = 0
+	enemy.flash = 0
+	action_queue.running = false
+	
+	# Evaluate next pulse mode
+	var direct_engagement_next = false
+	if using_queue:
+		for a in action_queue.actions:
+			if a.kind == "fire":
+				direct_engagement_next = true
+				break
+	var next_mode = timeline.evaluate_mode(
+		player_track,
+		enemy_track,
+		sim_time - recent_gunfire_time < 8.0,
+		sim_time - recent_hit_time < 8.0,
+		direct_engagement_next
+	)
+	var next_duration = 3.0 if next_mode == WegoTimeline.PulseMode.COMBAT else 8.0
+	var mode_name = "COMBAT" if next_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER"
+	if pulse_mode_label:
+		pulse_mode_label.text = "%s MODE (%.0fs pulse)" % [mode_name, next_duration]
+		pulse_mode_label.add_theme_color_override("font_color", Color("ff9b86") if next_mode == WegoTimeline.PulseMode.COMBAT else Color("8cddf0"))
+		
 	execute_button.disabled = false
-	execute_button.text = "EXECUTE NEXT  /  5 SECONDS"
+	var has_ongoing = travel_target != null or not action_queue.actions.is_empty()
+	execute_button.text = ("CONTINUE ORDERS (%.0fs)" if has_ongoing else "EXECUTE NEXT (%.0fs)") % next_duration
+	
 	for control in controls:
 		if control is SpinBox: control.editable = true
 		elif control is BaseButton: control.disabled = false
@@ -795,22 +993,21 @@ func _finish_execution() -> void:
 	fields.pivot.value = 0
 	updating_fields = false
 	if travel_target != null and player.position.distance_to(travel_target) < 0.7: travel_target = null
-	phase_report = "Turn complete. Review the report, then choose your next orders."
-	if player.shot_pending and not using_queue:
-		phase_report = "Gun did not fire: " + _fire_status() + ". Queue a shot again next turn."
-		_log(phase_report)
-	elif fields.fire.button_pressed and not using_queue:
-		phase_report = "Shot fired. Inspect SHOT for armor hits, or read the crew report for misses."
+	
+	phase_report = "Simultaneous pulse complete."
 	if travel_target != null:
-		phase_report += " Move still queued; EXECUTE continues it."
+		phase_report += " Move still queued / in progress (%.0fm to destination)." % player.position.distance_to(travel_target)
+	elif using_queue and not action_queue.actions.is_empty():
+		phase_report += " %d actions remain in queue." % action_queue.actions.size()
+	else:
+		phase_report += " Orders fulfilled. Ready for next pulse."
+		
 	fields.fire.button_pressed = false
 	if using_queue:
 		_sync_queue_markers()
-		if not action_queue.actions.is_empty(): phase_report += " Unfinished actions remain in the queue."
 	_publish_contact()
-	if player.orders.get("light", false) and not player.orders.get("fire", false):
-		phase_report = "Enemy spotted. FIRE AT THIS ESTIMATE queues a shot at its last seen position." if display_contact.get("source", "") == "Visual silhouette" else "No visual contact. Try another scan or move to improve your view."
-	_log("Assessment: your tank %s. Unfinished reloads and transfers continue on each tank’s next action." % player.model.status())
+	
+	_log("Assessment: your tank %s." % player.model.status())
 	if enemy.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"]:
 		_log("Engagement complete: enemy %s. Restart to try another engagement." % enemy.model.status())
 		phase = "COMPLETE"
@@ -825,8 +1022,8 @@ func _finish_execution() -> void:
 	if player.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"] and enemy.model.status() in ["Catastrophic loss", "Crew lost", "Combat ineffective"]:
 		phase_report = "Both tanks are out of action. Review TURN for who hit whom."
 	var moved = player.position.distance_to(turn_start_position)
-	if moved > 0.1: _event("YOUR TANK moved %.1f m this turn." % moved)
-	_event("Turn ended. Your tank: " + player.model.status() + ".")
+	if moved > 0.1: _event("YOUR TANK moved %.1f m this pulse." % moved)
+	_event("Pulse ended. Your tank: " + player.model.status() + ".")
 	_update_turn_report()
 	detail_tabs.current_tab = 3
 	if phase == "COMPLETE":
@@ -933,28 +1130,50 @@ func _dispersion(tank) -> float:
 	return angle
 
 func _fire(tank) -> void:
-	if phase != "EXECUTION" or tank != active_tank or not tank.ready_to_shoot(): return
+	if phase != "EXECUTION" or not tank.ready_to_shoot(): return
 	var origin: Vector3 = tank.position + Vector3(0, 2.65, 0)
-	var bearing = deg_to_rad(tank.orders.bearing)
-	var range_m: float = tank.orders.range
-	var aim: Vector3 = tank.position + Vector3(sin(bearing) * range_m, tank.orders.height, -cos(bearing) * range_m)
-	if tank.orders.has("aim_point"):
-		aim = tank.orders.aim_point
-		range_m = Vector2(aim.x - origin.x, aim.z - origin.z).length()
-	var time = range_m / Armor.MUZZLE_SPEED
-	aim.y += 4.905 * time * time
-	var dir = (aim - origin).normalized()
-	var cone = _dispersion(tank)
-	var right = dir.cross(Vector3.UP).normalized()
-	var up = right.cross(dir).normalized()
-	dir = (dir + right * rng.randfn(0, cone) + up * rng.randfn(0, cone)).normalized()
+	var dir: Vector3
+	var range_m: float = 75.0
+	
+	if tank == player and player.doctrine_fire_authorized and not fields.fire.button_pressed and player_firing_solution != null:
+		dir = player_firing_solution.compute_shell_direction(origin, rng)
+		range_m = player_firing_solution.range_m
+	else:
+		var aim: Vector3
+		if tank.orders.has("aim_point"):
+			aim = tank.orders.aim_point
+			range_m = Vector2(aim.x - origin.x, aim.z - origin.z).length()
+		else:
+			var bearing = deg_to_rad(tank.orders.get("bearing", 90.0))
+			range_m = tank.orders.get("range", 75.0)
+			aim = tank.position + Vector3(sin(bearing) * range_m, tank.orders.get("height", 1.4), -cos(bearing) * range_m)
+		var time = range_m / Armor.MUZZLE_SPEED
+		aim.y += 4.905 * time * time
+		dir = (aim - origin).normalized()
+		var cone = _dispersion(tank)
+		var right = dir.cross(Vector3.UP).normalized()
+		var up = right.cross(dir).normalized()
+		dir = (dir + right * rng.randfn(0, cone) + up * rng.randfn(0, cone)).normalized()
+		
 	tank.consume_round()
 	shot_serial += 1
+	recent_gunfire_time = sim_time
 	playback.shot_fired()
 	var tracer = Vehicle.box(self, Vector3(0.08, 0.08, 1.5), Transform3D(Basis.IDENTITY, origin), Color("ffdb87"))
 	shells.append({"id": shot_serial, "origin": origin, "position": origin, "velocity": dir * Armor.MUZZLE_SPEED, "shooter": tank, "distance": 0.0, "tracer": tracer})
 	AudioManager.play_sound_3d("cannon_fire", origin, 1, 40, 700)
-	_sense(enemy if tank == player else player, tank, true)
+	
+	# Acoustic gunshot detection
+	var other_tank = enemy if tank == player else player
+	var other_track = player_track if tank == enemy else enemy_track
+	var acoustic_res = sensor_model.evaluate(other_tank, tank, get_world_3d(), sim_time, true)
+	var acoustic_obs = acoustic_res.get("acoustic_observation", null)
+	if acoustic_obs != null:
+		other_track.integrate_observation(acoustic_obs, sim_time)
+		if other_tank == player:
+			_publish_contact()
+			_event("ACOUSTIC: Gun report detected on bearing %03d°!" % int(acoustic_obs.bearing_deg))
+
 	var known_origin: bool = tank == player or contact_is_visible()
 	var display_origin: Vector3 = origin if known_origin else display_contact.get("position", origin)
 	shot_events.append({"id": shot_serial, "turn_time": turn_start_time, "shooter": tank.name, "from": display_origin, "to": display_origin, "known_origin": known_origin, "fired": shot_clock, "until": shot_clock + 4, "result": "IN FLIGHT", "target": "", "hit": false})
@@ -980,13 +1199,18 @@ func _step_shells(delta: float) -> void:
 		var obstacle_distance = start.distance_to(obstruction.position) if not obstruction.is_empty() else INF
 		var remove = false
 		if nearest <= segment and nearest < obstacle_distance:
+			if target == player:
+				player_was_hit_this_pulse = true
+			else:
+				enemy_was_hit_this_pulse = true
+			recent_hit_time = sim_time
+			
 			var record = target.model.resolve(local_start, local_dir, shell.velocity.length(), rng.randi())
 			record.range = shell.distance + nearest
 			record.target = target.name
 			record.shooter = shell.shooter.name
 			record.shot_id = shell.id
 			record.time = sim_time
-			# Keep the recorded incoming segment short enough for a useful cutaway.
 			for path in record.paths:
 				if not path.fragment and path.from == local_start: path.from = local_start + local_dir * maxf(0, nearest - 3)
 			records.append(record.duplicate(true))
@@ -1000,6 +1224,14 @@ func _step_shells(delta: float) -> void:
 		elif obstacle_distance <= segment:
 			_set_shot_result(shell.id, obstruction.position, "MISS • COVER / GROUND", "Cover / ground", false)
 			_event("Shot #%02d: %s → COVER / GROUND. No tank hit." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
+			
+			# Gunner splash observation for range refinement
+			if shell.shooter == player and player_track != null and contact_is_visible():
+				var imp_res = sensor_model.evaluate(player, enemy, get_world_3d(), sim_time, false, obstruction.position)
+				var splash_rel = imp_res.get("impact_observation", "")
+				if splash_rel != null and not splash_rel.is_empty() and splash_rel != "HIT":
+					player_track.apply_observed_impact(splash_rel)
+					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
 			remove = true
 		shell.distance += segment
 		shell.position = finish
@@ -1026,63 +1258,47 @@ func _set_shot_result(id: int, point: Vector3, result: String, target: String, h
 			event.until = shot_clock + 4.0
 			return
 
-func _sense(observer, target, gun_report = false) -> void:
-	var offset: Vector3 = target.position - observer.position
-	var distance = offset.length()
-	var actual_bearing = atan2(offset.x, -offset.z)
-	var turret_bearing = -(observer.rotation.y + observer.model.turret_yaw)
-	var watching = observer.orders.get("observe", false)
-	var optics = observer.model.occupied("Commander") and observer.model.functional("Commander optics")
-	var in_sector = absf(angle_difference(turret_bearing, actual_bearing)) < (0.5 if optics else 0.16)
-	var query = PhysicsRayQueryParameters3D.create(observer.position + Vector3.UP * 3, target.position + Vector3.UP * 2, 1)
-	var clear = get_world_3d().direct_space_state.intersect_ray(query).is_empty()
-	var lit = target.lamp.visible or observer.lamp.visible or target.flash > 0
-	var visual = clear and in_sector and watching and distance < (140 if lit else 48) and optics
-	if visual:
-		observer.contact = {"position": target.position + Vector3(rng.randf_range(-0.3, 0.3), 0, rng.randf_range(-0.3, 0.3)), "uncertainty": 0.8, "time": sim_time, "source": "Visual silhouette", "bearing": rad_to_deg(actual_bearing), "arc": 1.0}
-		if observer == player: _publish_contact()
-		return
-	if not gun_report and (not target.engine_on or not target.model.functional("Engine") or distance > 190): return
-	var arc = 2.0 if gun_report else (5.0 if not observer.engine_on else 11.0)
-	if SoundEventManager.masking_active and not gun_report: arc *= 1.8
-	var measured = actual_bearing + deg_to_rad(rng.randf_range(-arc, arc))
-	var direction = Vector2(sin(measured), -cos(measured))
-	var here = Vector2(observer.position.x, observer.position.z)
-	var range_guess = distance * rng.randf_range(0.65, 1.35)
-	var estimated = here + direction * range_guess
-	var uncertainty = maxf(5, distance * 0.35)
-	var source = "Gun report" if gun_report else "Engine noise"
-	for observation in observer.history:
-		if here.distance_to(observation.position) < 12 or sim_time - observation.time > 20: continue
-		var cross = direction.cross(observation.direction)
-		if absf(cross) < 0.12: continue
-		var t = (observation.position - here).cross(observation.direction) / cross
-		var old_t = (observation.position - here).cross(direction) / cross
-		if t > 5 and t < 350 and old_t > 0:
-			estimated = here + direction * t
-			uncertainty = maxf(4, t * deg_to_rad(arc) / absf(cross))
-			source = "Cross-bearing fix"
-			break
-	if observer.history.is_empty() or here.distance_to(observer.history.back().position) > 8:
-		observer.history.append({"position": here, "direction": direction, "time": sim_time})
-		if observer.history.size() > 12: observer.history.pop_front()
-	# Preserve a precise sighting through the ten-second player/enemy round.
-	if not observer.contact.is_empty() and observer.contact.source == "Visual silhouette" and sim_time - observer.contact.time < 13 and not gun_report: return
-	var updated = {"position": Vector3(estimated.x, 0, estimated.y), "uncertainty": uncertainty, "time": sim_time, "source": source, "bearing": rad_to_deg(measured), "arc": arc}
-	if not observer.contact.is_empty() and not gun_report:
-		var previous: Dictionary = observer.contact
-		var weight = 0.18 if source == "Engine noise" else 0.45
-		updated.position = previous.position.lerp(updated.position, weight)
-		# Repeated reports from the same place do not magically narrow the uncertainty.
-		updated.uncertainty = maxf(uncertainty, previous.uncertainty * (1 - weight))
-	observer.contact = updated
-	if observer == player and gun_report: _publish_contact()
+func _evaluate_sensors(dt: float) -> void:
+	if not is_instance_valid(player) or not is_instance_valid(enemy): return
+	var world_3d = get_world_3d()
+	
+	# 1. Player senses Enemy
+	var p_res = sensor_model.evaluate(player, enemy, world_3d, sim_time)
+	var p_vis = p_res.get("visual_observation", null)
+	var p_ac = p_res.get("acoustic_observation", null)
+	if p_vis != null:
+		var was_visible = player_track.has_visual_los
+		player_track.integrate_observation(p_vis, sim_time)
+		if not was_visible:
+			_event("VISUAL CONTACT: Target acquired!")
+		_publish_contact()
+	elif p_ac != null:
+		player_track.integrate_observation(p_ac, sim_time)
+		if p_ac.source == "Gun report":
+			_publish_contact()
+	else:
+		player_track.predict_motion(dt, sim_time)
+		
+	# 2. Enemy senses Player (Identical sensor rules! No cheating!)
+	var e_res = sensor_model.evaluate(enemy, player, world_3d, sim_time)
+	var e_vis = e_res.get("visual_observation", null)
+	var e_ac = e_res.get("acoustic_observation", null)
+	if e_vis != null:
+		enemy_track.integrate_observation(e_vis, sim_time)
+	elif e_ac != null:
+		enemy_track.integrate_observation(e_ac, sim_time)
+	else:
+		enemy_track.predict_motion(dt, sim_time)
+		
+	# Update firing solution
+	player_firing_solution = FiringSolution.calculate(player, player_track, rng)
 
 func _publish_contact() -> void:
-	if not player.contact.is_empty(): display_contact = player.contact.duplicate(true)
+	if player_track != null and (player_track.has_visual_los or player_track.has_silhouette or player_track.position_uncertainty < 50.0):
+		display_contact = player_track.to_dict()
 
 func contact_is_visible() -> bool:
-	return not player.contact.is_empty() and player.contact.source == "Visual silhouette" and sim_time - player.contact.time < 1.0
+	return player_track != null and player_track.has_visual_los and (player_track.time_since_visual < 1.0)
 
 func _fire_status() -> String:
 	if not player.model.can_fire(): return "gunner, breech or ammunition unavailable — check CREW"
@@ -1108,7 +1324,8 @@ func _refresh_orders() -> void:
 		var offset: Vector3 = travel_target - player.position
 		var turn_time = absf(angle_difference(player.rotation.y, -atan2(offset.x, -offset.z))) / 0.6
 		var travel_time = distance / (2 if fields.creep.button_pressed else 7)
-		lines.append("MOVE %.0f m • about %d turn(s)" % [distance, maxi(1, ceili((turn_time + travel_time) / 5))])
+		var p_dur = timeline.pulse_duration if timeline else 5.0
+		lines.append("MOVE %.0f m • about %d pulse(s)" % [distance, maxi(1, ceili((turn_time + travel_time) / p_dur))])
 		if not player.model.can_move(): lines.append("Cannot move — check CREW / systems")
 		elif not fields.engine.button_pressed: lines.append("Engine off — enable it to move")
 	elif absf(fields.move.value) > 0 or absf(fields.pivot.value) > 0:
@@ -1131,7 +1348,10 @@ func _refresh_orders() -> void:
 	fire_button.set_pressed_no_signal(input_mode == "fire")
 	aim_button.set_pressed_no_signal(input_mode == "aim")
 	hull_button.set_pressed_no_signal(input_mode == "hull")
-	execution_progress.value = 5 - time_left if phase == "EXECUTION" else 0
+	
+	var p_dur = timeline.pulse_duration if timeline else 5.0
+	execution_progress.max_value = p_dur
+	execution_progress.value = p_dur - time_left if phase == "EXECUTION" else 0
 	if phase == "EXECUTION":
 		if not playback.active.is_empty():
 			action_hint.text = "IMPACT REPLAY: " + _shot_title(playback.active)
@@ -1140,7 +1360,7 @@ func _refresh_orders() -> void:
 		elif playback.shot_focus > 0:
 			action_hint.text = "SLOW-MOTION REPLAY"
 		else:
-			action_hint.text = "EXECUTING: %.1fs / 5.0s" % (5 - time_left)
+			action_hint.text = "EXECUTING SIMULTANEOUSLY: %.1fs / %.0fs" % [p_dur - time_left, p_dur]
 		execute_button.text = "RESUME ▶ (%.1fs)" % time_left if _can_edit_orders() else "RUNNING (%.1fs)" % time_left
 		execute_button.disabled = not _can_edit_orders()
 	elif phase == "COMPLETE":
@@ -1155,7 +1375,8 @@ func _refresh_orders() -> void:
 	else:
 		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "")
 	if phase not in ["EXECUTION", "COMPLETE"]:
-		execute_button.text = "EXECUTE ORDERS  ▶" if travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty() else "EXECUTE / WAIT 5s"
+		var has_orders = travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty()
+		execute_button.text = "EXECUTE ORDERS  ▶" if has_orders else "EXECUTE / WAIT %.0fs" % p_dur
 		movement_button.disabled = not player.model.can_move()
 		fire_button.disabled = not player.model.can_fire()
 		contact_fire_button.disabled = not player.model.can_fire() or display_contact.is_empty()
@@ -1167,21 +1388,34 @@ func _process(delta: float) -> void:
 	camera.size = zoom
 	camera.position = player.position + Vector3(37, 90, 65)
 	camera.look_at(player.position + Vector3(37, 0, 0))
-	var phase_str = "REPLAY" if not playback.active.is_empty() else (("ACTIVE" if active_tank == player else "ENEMY") if phase == "EXECUTION" and not playback.paused else "PLANNING")
-	status_label.text = "TURN %02d • %s\n%s • %d rnds" % [turn, phase_str, player.model.status(), player.model.rounds]
+	var pulse_name = "COMBAT (3s)" if (timeline and timeline.current_mode == WegoTimeline.PulseMode.COMBAT) else "MANEUVER (8s)"
+	var phase_str = "REPLAY" if not playback.active.is_empty() else ("SIMULTANEOUS EXEC" if phase == "EXECUTION" and not playback.paused else "PLANNING")
+	status_label.text = "PULSE #%02d • %s\nMODE: %s\n%s • %d rnds" % [turn, phase_str, pulse_name, player.model.status(), player.model.rounds]
 	crew_label.text = player.station_report()
-	var contact = display_contact
-	if not contact.is_empty():
-		var age = sim_time - contact.time
-		var radius: float = maxf(1.5, contact.uncertainty + age * 2)
+	
+	if player_track != null and not display_contact.is_empty():
+		var age = sim_time - player_track.last_observation_time
+		var radius: float = maxf(1.5, player_track.position_uncertainty)
 		var blend = 1.0 - exp(-delta * 6)
-		contact_visual_position = contact_visual_position.lerp(contact.position, blend)
+		contact_visual_position = contact_visual_position.lerp(player_track.estimated_position, blend)
 		contact_visual_radius = lerpf(contact_visual_radius, radius, blend)
-		var distance = player.position.distance_to(contact.position)
+		var distance = player_track.estimated_range
 		var visible_contact = contact_is_visible()
-		contact_label.text = "CONTACT A • %s\nEst. Range: %.0f–%.0f m (%.1fs ago)" % ["SIGHTED" if visible_contact else ("LAST SEEN" if contact.source == "Visual silhouette" else "UNCONFIRMED"), maxf(0, distance - radius), distance + radius, age]
+		var state_str = "SIGHTED" if visible_contact else ("LAST SEEN" if player_track.has_silhouette else "UNCONFIRMED")
+		var sol_quality = player_firing_solution.solution_quality if player_firing_solution else "NO SOLUTION"
+		contact_label.text = "CONTACT A • %s\nEst. Range: %.0f m (±%.0f m)\nHeading: %03d° (±%d°) • Spd: %.1f m/s\nSolution: %s (Age: %.1fs)" % [
+			state_str,
+			distance,
+			player_track.range_uncertainty,
+			int(player_track.estimated_heading_deg),
+			int(player_track.heading_uncertainty),
+			player_track.estimated_speed_mps,
+			sol_quality,
+			age
+		]
 		enemy.visible = visible_contact
-	else: enemy.visible = false
+	else:
+		enemy.visible = false
 	_refresh_orders()
 	selected_record.disabled = phase == "EXECUTION"
 	pause_button.disabled = phase != "EXECUTION"
@@ -1209,6 +1443,9 @@ func _log(message: String) -> void:
 	if event_log: event_log.text = "\n".join(log_lines)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F3:
+		debug_overlay_enabled = not debug_overlay_enabled
+		_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		input_mode = "select"
 		order_notice = "Target selection cancelled. Existing orders are unchanged."
@@ -1231,3 +1468,4 @@ func _unhandled_input(event: InputEvent) -> void:
 					_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
 					input_mode = "select"
 				else: order_notice = "Choose MOVE or AIM & FIRE first, then click a point in the yard."
+
