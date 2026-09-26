@@ -31,6 +31,9 @@ var cam_fov: float = 52.0
 var cam_shake: float = 0.0
 var is_orbiting: bool = false
 var last_mouse_pos: Vector2 = Vector2.ZERO
+var cam_following_player: bool = true
+var right_click_down_pos: Vector2 = Vector2.ZERO
+var right_click_dragged: bool = false
 
 # Configurable Tactical Spawn Zones
 var minimum_enemy_spawn_distance: float = 800.0
@@ -217,8 +220,11 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 	camera.fov = cam_fov
+	camera.far = 4500.0
+	camera.near = 0.5
 	add_child(camera)
 	camera.current = true
+	cam_target = player.position
 	_update_camera(0.0)
 	_build_ui()
 	_set_map_running(false)
@@ -258,20 +264,11 @@ func _apply_ghost_material(tank: A47_Mastodon_Vehicle) -> void:
 func _update_camera(delta: float) -> void:
 	if not is_instance_valid(player) or camera == null: return
 	
-	if delta > 0.0:
-		if phase == "EXECUTION":
-			var target_pitch = deg_to_rad(-20.0)
-			var target_dist = 22.0
-			if not is_orbiting:
-				cam_pitch = lerpf(cam_pitch, target_pitch, delta * 2.0)
-				cam_distance = lerpf(cam_distance, target_dist, delta * 2.0)
-			var combat_midpoint = player.position.lerp(enemy.position, 0.35)
-			cam_target = cam_target.lerp(combat_midpoint, delta * 3.0)
+	if cam_following_player:
+		if delta > 0.0:
+			cam_target = cam_target.lerp(player.position, delta * 5.0)
 		else:
-			if not is_orbiting:
-				cam_target = cam_target.lerp(player.position + Vector3(6, 0, 0), delta * 4.0)
-	elif not is_orbiting:
-		cam_target = player.position + Vector3(6, 0, 0)
+			cam_target = player.position
 
 	var shake_offset = Vector3.ZERO
 	if cam_shake > 0.0:
@@ -622,7 +619,7 @@ func _build_ui() -> void:
 			if player.model.reassign(person.selected, station.get_item_text(station.selected)): _log("Crew transfer started.")
 			else: _log("Transfer unavailable."))
 	_label(help_box, "TACTICAL GUIDE", 15)
-	_label(help_box, "• MOVE: Click ground to set waypoint.\n• AIM & FIRE: Click enemy or ground to target.\n• SCAN: 2s searchlight sweep.\n• EXECUTE: Runs 5s turn simultaneously.\n• Mouse wheel: Zoom in/out.", 12)
+	_label(help_box, "• LEFT-CLICK: Click ground to queue move.\n• RIGHT-CLICK: Cancel / undo last queued order.\n• RIGHT-DRAG: Orbit view (tactical to top-down).\n• MOUSE WHEEL: Zoom tactical / satellite overview.\n• WASD: Pan battlefield • F: Focus on Mastodon.\n• EXECUTE: Simultaneous WEGO pulse execution.", 12)
 	var hint_box = _hud_bar(root, 0.28, 0, 0.72, 0.08)
 	var playback_row = HBoxContainer.new()
 	playback_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -778,6 +775,21 @@ func _cancel_action(index: int) -> void:
 	_sync_queue_markers()
 	_rebuild_queue()
 	order_notice = title + " cancelled. Spent time and fired shells are unchanged."
+
+func _pop_last_action() -> void:
+	if not _can_edit_orders(): return
+	if not action_queue.actions.is_empty():
+		var idx = action_queue.actions.size() - 1
+		var title: String = Actions.TITLES.get(action_queue.actions[idx].kind, "Action")
+		_cancel_action(idx)
+		order_notice = "Removed last queued order: %s." % title
+		_log("Removed last order: %s." % title)
+	elif travel_target != null or fields.fire.button_pressed or fields.light.button_pressed:
+		_clear_orders()
+		order_notice = "Removed last queued order."
+		_log("Removed last queued order.")
+	else:
+		order_notice = "No queued orders to remove."
 
 func _sync_queue_markers() -> void:
 	travel_target = null
@@ -1013,6 +1025,7 @@ func _execute() -> void:
 		
 	_set_map_running(true)
 	phase = "EXECUTION"
+	cam_following_player = true
 	_event("SIMULTANEOUS EXECUTION (%s, %.0fs): Both sides acting." % ["COMBAT" if p_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER", timeline.pulse_duration])
 	if plan.has("destination"): _event("YOU: advancing toward destination.")
 	if plan.light: _event("YOU: sweeping searchlight for 2 seconds.")
@@ -1621,7 +1634,7 @@ func _refresh_orders() -> void:
 		action_hint.text = "Click target location to aim & fire"
 	else:
 		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
-		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — ORDERS NOT EXECUTING")
+		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — Left-click ground to MOVE • Right-click to UNDO last order")
 	if phase not in ["EXECUTION", "COMPLETE"]:
 		var has_orders = travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty()
 		execute_button.text = "EXECUTE ORDERS  ▶" if has_orders else "EXECUTE / WAIT %.0fs" % p_dur
@@ -1740,10 +1753,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			enemy.set_debug_visuals(debug_overlay_enabled)
 			_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
 		elif event.keycode == KEY_F:
-			cam_target = player.position + Vector3(6, 0, 0)
+			cam_following_player = true
+			cam_target = player.position
 			_event("Camera: Focused on Mastodon.")
 		elif event.keycode == KEY_C:
-			if player_track != null:
+			if player_track != null and player_track.has_contact():
+				cam_following_player = false
 				cam_target = player_track.estimated_position
 				_event("Camera: Focused on contact estimate.")
 		elif event.keycode == KEY_O:
@@ -1752,30 +1767,49 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_TAB:
 			if left_drawer: left_drawer.visible = not left_drawer.visible
 			if right_drawer: right_drawer.visible = not right_drawer.visible
-		elif event.keycode == KEY_W:
-			cam_target += Vector3(-sin(cam_yaw), 0, -cos(cam_yaw)) * 6.0
-		elif event.keycode == KEY_S:
-			cam_target += Vector3(sin(cam_yaw), 0, cos(cam_yaw)) * 6.0
-		elif event.keycode == KEY_A:
-			cam_target += Vector3(-cos(cam_yaw), 0, sin(cam_yaw)) * 6.0
-		elif event.keycode == KEY_D:
-			cam_target += Vector3(cos(cam_yaw), 0, -sin(cam_yaw)) * 6.0
+		elif event.keycode in [KEY_W, KEY_S, KEY_A, KEY_D]:
+			var pan_speed = maxf(10.0, cam_distance * 0.18)
+			cam_following_player = false
+			if event.keycode == KEY_W:
+				cam_target += Vector3(-sin(cam_yaw), 0, -cos(cam_yaw)) * pan_speed
+			elif event.keycode == KEY_S:
+				cam_target += Vector3(sin(cam_yaw), 0, cos(cam_yaw)) * pan_speed
+			elif event.keycode == KEY_A:
+				cam_target += Vector3(-cos(cam_yaw), 0, sin(cam_yaw)) * pan_speed
+			elif event.keycode == KEY_D:
+				cam_target += Vector3(cos(cam_yaw), 0, -sin(cam_yaw)) * pan_speed
 		elif event.keycode == KEY_ESCAPE:
 			input_mode = "select"
 			order_notice = "Target selection cancelled. Existing orders are unchanged."
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			is_orbiting = event.pressed
-			last_mouse_pos = event.position
-			if event.pressed and _can_edit_orders() and input_mode != "select":
-				input_mode = "select"
-				order_notice = "Target selection cancelled. Use CLEAR ALL to remove queued orders."
+			if event.pressed:
+				is_orbiting = true
+				last_mouse_pos = event.position
+				right_click_down_pos = event.position
+				right_click_dragged = false
+			else:
+				is_orbiting = false
+				if not right_click_dragged and _can_edit_orders():
+					if input_mode != "select":
+						input_mode = "select"
+						order_notice = "Target selection cancelled."
+					else:
+						_pop_last_action()
 		elif event.pressed:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				cam_distance = clampf(cam_distance - 2.5, 8.0, 65.0)
+				var zoom_step = maxf(3.0, cam_distance * 0.16)
+				cam_distance = clampf(cam_distance - zoom_step, 8.0, 320.0)
+				var zoom_t = clampf((cam_distance - 20.0) / 140.0, 0.0, 1.0)
+				var natural_pitch = lerpf(deg_to_rad(-22.0), deg_to_rad(-85.0), zoom_t)
+				cam_pitch = lerpf(cam_pitch, natural_pitch, 0.6)
 				zoom = clampf(zoom - 8.0, 35.0, 200.0)
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				cam_distance = clampf(cam_distance + 2.5, 8.0, 65.0)
+				var zoom_step = maxf(3.0, cam_distance * 0.16)
+				cam_distance = clampf(cam_distance + zoom_step, 8.0, 320.0)
+				var zoom_t = clampf((cam_distance - 20.0) / 140.0, 0.0, 1.0)
+				var natural_pitch = lerpf(deg_to_rad(-22.0), deg_to_rad(-85.0), zoom_t)
+				cam_pitch = lerpf(cam_pitch, natural_pitch, 0.6)
 				zoom = clampf(zoom + 8.0, 35.0, 200.0)
 			elif event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
 				var ray = camera.project_ray_origin(event.position)
@@ -1789,10 +1823,14 @@ func _unhandled_input(event: InputEvent) -> void:
 						if kind == "aim": _aim_at(hit)
 						_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
 						input_mode = "select"
-					else: order_notice = "Choose MOVE or AIM & FIRE first, then click a point in the yard."
+					else:
+						# Default / nothing selected: auto-assume player is trying to move tank there
+						_queue_move(hit)
 	elif event is InputEventMouseMotion and is_orbiting:
 		var delta_mouse = event.position - last_mouse_pos
 		last_mouse_pos = event.position
+		if (event.position - right_click_down_pos).length() > 6.0:
+			right_click_dragged = true
 		cam_yaw += delta_mouse.x * 0.006
-		cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-80.0), deg_to_rad(-10.0))
+		cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-86.0), deg_to_rad(-10.0))
 
