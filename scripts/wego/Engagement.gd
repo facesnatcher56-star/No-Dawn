@@ -447,23 +447,40 @@ func _build_ui() -> void:
 	left_header.add_child(left_close)
 	pulse_mode_label = _label(left, "MANEUVER MODE (8.0s pulse)", 12)
 	pulse_mode_label.add_theme_color_override("font_color", Color("8cddf0"))
-	status_label = _label(left, "", 13)
+	status_label = _label(left, "", 12)
+	# Gunnery Station (Primary Combat Action)
+	var gunnery_panel = PanelContainer.new()
+	left.add_child(gunnery_panel)
+	var g_box = VBoxContainer.new()
+	gunnery_panel.add_child(g_box)
+	var gunner_btn = _button(g_box, "GUNNER SIGHT [G]", _toggle_gunner_view, 34)
+	gunner_btn.tooltip_text = "Take station at the 10.5° periscope optic: manual aim, range dialing & trigger fire."
+	var g_style = StyleBoxFlat.new()
+	g_style.bg_color = Color(0.10, 0.20, 0.14, 0.92)
+	g_style.border_color = Color(0.3, 0.85, 0.45, 0.85)
+	g_style.set_border_width_all(1)
+	g_style.set_corner_radius_all(4)
+	gunnery_panel.add_theme_stylebox_override("panel", g_style)
+	var gunner_sub = _label(g_box, "Periscope Optic • Manual Aim & Range", 10)
+	gunner_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_sub.add_theme_color_override("font_color", Color("77dd77"))
+
+	# Tactical Maneuver & Laying
+	_label(left, "MANEUVER & ORIENTATION", 11)
 	var actions = HBoxContainer.new()
 	left.add_child(actions)
-	movement_button = _button(actions, "MOVE", func(): _set_mode("move"), 38)
-	fire_button = _button(actions, "AIM & FIRE", func(): _set_mode("fire"), 38)
+	movement_button = _button(actions, "MOVE [M]", func(): _set_mode("move"), 28)
 	movement_button.toggle_mode = true
-	fire_button.toggle_mode = true
-	movement_button.tooltip_text = "Click MOVE, then click clear ground."
-	fire_button.tooltip_text = "Append an aim-and-fire action."
-	var orientation = HBoxContainer.new()
-	left.add_child(orientation)
-	aim_button = _button(orientation, "AIM TURRET", func(): _set_mode("aim"), 30)
-	hull_button = _button(orientation, "TURN HULL", func(): _set_mode("hull"), 30)
-	aim_button.tooltip_text = "Rotate turret only."
-	aim_button.toggle_mode = true
+	movement_button.tooltip_text = "Click MOVE, then click clear ground (or left-click ground directly)."
+	hull_button = _button(actions, "HULL [H]", func(): _set_mode("hull"), 28)
 	hull_button.toggle_mode = true
-	hull_button.tooltip_text = "Pivot hull only."
+	hull_button.tooltip_text = "Pivot hull facing direction."
+	aim_button = _button(actions, "TURRET [T]", func(): _set_mode("aim"), 28)
+	aim_button.toggle_mode = true
+	aim_button.tooltip_text = "Traverse turret toward tactical direction."
+	
+	# Retain fire_button reference for backwards compatibility
+	fire_button = Button.new()
 	var utility = HBoxContainer.new()
 	left.add_child(utility)
 	reload_button = _button(utility, "RELOAD", func(): _append_action("reload", player.position), 28)
@@ -1742,15 +1759,14 @@ func _refresh_orders() -> void:
 		action_hint.text = "Click direction to orient " + ("turret" if input_mode == "aim" else "hull")
 	elif input_mode == "fire":
 		action_hint.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35))
-		action_hint.text = "Click target location to aim & fire"
+		action_hint.text = "Press [G] to enter Gunner Sight"
 	else:
 		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
-		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — Left-click ground to MOVE • Right-click to UNDO last order")
+		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — Left-click ground to MOVE • [G] for Gunner Sight • Right-click to UNDO")
 	if phase not in ["EXECUTION", "COMPLETE"]:
 		var has_orders = travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty()
 		execute_button.text = "EXECUTE ORDERS  ▶" if has_orders else "EXECUTE / WAIT %.0fs" % p_dur
 		movement_button.disabled = not player.model.can_move()
-		fire_button.disabled = not player.model.can_fire()
 		contact_fire_button.disabled = not player.model.can_fire() or display_contact.is_empty()
 		scan_button.disabled = false
 

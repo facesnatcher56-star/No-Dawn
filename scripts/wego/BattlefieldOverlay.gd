@@ -202,7 +202,7 @@ func _draw() -> void:
 				else: arrow_str = "↖ NW"
 				
 				if track.estimated_speed_mps > 0.3:
-					label_lines.append("%s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
+					label_lines.append("HEADING: %s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
 				else:
 					label_lines.append("STATIONARY")
 					

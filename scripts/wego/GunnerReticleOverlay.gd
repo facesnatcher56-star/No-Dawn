@@ -136,7 +136,8 @@ func _draw_actual_bore_indicator(center: Vector2) -> void:
 	var pitch_diff = sight_system.current_bore_pitch - goal_bore_pitch
 	
 	# Convert angular difference (radians) to screen pixel offset
-	var x_offset = yaw_diff * 1000.0 * (MILS_TO_PIXELS * 0.058)
+	# If bore is to the left of aim, yaw_diff is positive, so -yaw_diff correctly renders on the left of screen (-X)
+	var x_offset = -yaw_diff * 1000.0 * (MILS_TO_PIXELS * 0.058)
 	var y_offset = -pitch_diff * 1000.0 * (MILS_TO_PIXELS * 0.058)
 	var bore_pos = center + Vector2(x_offset, y_offset)
 	

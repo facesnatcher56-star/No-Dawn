@@ -16,9 +16,12 @@ func check(condition: bool, message: String) -> void:
 	else:
 		print("  ✅ PASS: ", message)
 
-func _init() -> void:
+func _initialize() -> void:
+	call_deferred("run_all_tests")
+
+func run_all_tests() -> void:
 	print("==================================================")
-	print("  TRANSITIONAL GUNNERY PASS: 10 VALIDATION TESTS   ")
+	print("  TRANSITIONAL GUNNERY PASS: 12 VALIDATION TESTS   ")
 	print("==================================================")
 
 	test_01_wrong_range_lands_short()
@@ -31,6 +34,8 @@ func _init() -> void:
 	test_08_estimated_lead_calculation()
 	test_09_optical_los_and_ghost_suppression()
 	test_10_observed_splash_range_correction()
+	test_11_bore_lag_horizontal_direction()
+	await test_12_no_arcade_aim_and_fire_mode()
 
 	print("==================================================")
 	print("Gunnery Pass checks completed. Total Failures: ", failures)
@@ -283,3 +288,43 @@ func test_10_observed_splash_range_correction() -> void:
 	track.apply_observed_impact("OVER")
 	check(track.estimated_range < cur_range, "Observed OVER splash brackets target inward (New: %.1fm)" % track.estimated_range)
 	check(track.range_uncertainty < cur_unc, "Target bracketed between SHORT and OVER further contracts uncertainty (New: ±%.1fm)" % track.range_uncertainty)
+
+func test_11_bore_lag_horizontal_direction() -> void:
+	print("\n--- Test 11: Bore Lag Horizontal Direction (No Left/Right Inversion) ---")
+	var tank = TacticalVehicle.new()
+	tank.gunner_sight.current_bore_yaw = 0.0
+	
+	# Command turret to turn RIGHT (in Godot right is negative yaw)
+	tank.gunner_sight.commanded_yaw = deg_to_rad(-30.0)
+	
+	# The physical barrel is still at yaw 0 (to the LEFT of -30° in the gunner's frame of reference)
+	var yaw_diff = angle_difference(tank.gunner_sight.commanded_yaw, tank.gunner_sight.current_bore_yaw)
+	var x_offset = -yaw_diff * 1000.0 * (14.0 * 0.058)
+	
+	# In the gunner optic screen, x_offset must be NEGATIVE (drawn on the LEFT side of the screen)
+	check(x_offset < 0.0, "When looking right, physical barrel lagging on the left renders on the left (-X on screen, Got: %.1f px)" % x_offset)
+	
+	# Now command turret to turn LEFT (positive yaw in Godot)
+	tank.gunner_sight.commanded_yaw = deg_to_rad(30.0)
+	var yaw_diff_left = angle_difference(tank.gunner_sight.commanded_yaw, tank.gunner_sight.current_bore_yaw)
+	var x_offset_left = -yaw_diff_left * 1000.0 * (14.0 * 0.058)
+	
+	# In the gunner optic screen, x_offset must be POSITIVE (drawn on the RIGHT side of the screen)
+	check(x_offset_left > 0.0, "When looking left, physical barrel lagging on the right renders on the right (+X on screen, Got: %.1f px)" % x_offset_left)
+
+func test_12_no_arcade_aim_and_fire_mode() -> void:
+	print("\n--- Test 12: No Arcade Aim & Fire on Tactical Map ---")
+	var scene = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(scene)
+	await process_frame
+	await physics_frame
+	scene.set_physics_process(false)
+	scene._process(0)
+	
+	# Map click defaults to MOVE, not arcade fire
+	var ground_pt = scene.player.position + Vector3(15, 0, 0)
+	scene._queue_move(ground_pt)
+	check(scene.action_queue.actions.size() == 1, "Action added to queue")
+	check(scene.action_queue.actions[0].kind == "move", "Map click creates tactical MOVE action, not arcade fire")
+	scene.queue_free()
+	await process_frame
