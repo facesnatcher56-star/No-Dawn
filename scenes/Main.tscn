@@ -14,8 +14,8 @@ fog_mode = 1
 fog_light_color = Color(0.50, 0.56, 0.64, 1)
 fog_density = 0.0012
 fog_depth_curve = 1.0
-fog_depth_begin = 180.0
-fog_depth_end = 750.0
+fog_depth_begin = 350.0
+fog_depth_end = 3200.0
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -29,7 +29,7 @@ light_color = Color(1.0, 0.96, 0.90, 1)
 light_energy = 1.15
 shadow_enabled = true
 shadow_bias = 0.02
-directional_shadow_max_distance = 350.0
+directional_shadow_max_distance = 600.0
 
 [node name="MapBuilder" type="Node3D" parent="."]
 script = ExtResource("2_mapb")

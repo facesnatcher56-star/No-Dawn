@@ -19,6 +19,10 @@ var mat_tarp: StandardMaterial3D
 var blast_furnace_scene = preload("res://scenes/BlastFurnace.tscn")
 var steam_hammer_scene = preload("res://scenes/SteamHammer.tscn")
 
+const InfrastructureBuilderClass = preload("res://scripts/environment/MapInfrastructureBuilder.gd")
+const DistrictBuilderClass = preload("res://scripts/environment/MapDistrictBuilder.gd")
+const TacticalCoverBuilderClass = preload("res://scripts/environment/MapTacticalCoverBuilder.gd")
+
 func _ready() -> void:
 	_init_materials()
 	_build_ground()
@@ -32,6 +36,19 @@ func _ready() -> void:
 	_build_steam_hammer()
 	_build_scattered_cover_and_fires()
 	_build_industrial_lights()
+
+	# Populate full 3,600m x 3,600m battlefield across all sectors & quadrants
+	var infra_builder = InfrastructureBuilderClass.new()
+	add_child(infra_builder)
+	infra_builder.build(self)
+
+	var district_builder = DistrictBuilderClass.new()
+	add_child(district_builder)
+	district_builder.build(self)
+
+	var tactical_builder = TacticalCoverBuilderClass.new()
+	add_child(tactical_builder)
+	tactical_builder.build(self)
 
 func _init_materials() -> void:
 	mat_ground = StandardMaterial3D.new()
