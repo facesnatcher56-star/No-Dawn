@@ -47,6 +47,9 @@ var consecutive_visual_seconds: float = 0.0
 func _init(id: String = "CONTACT_A") -> void:
 	contact_id = id
 
+func has_contact() -> bool:
+	return last_observation_time >= 0.0 or has_visual_los or has_silhouette or not observation_history.is_empty()
+
 func integrate_observation(obs, _sim_time: float = 0.0, crew_skill: Dictionary = {}) -> void:
 	if obs == null: return
 	if obs.is_direct_visual:

@@ -29,6 +29,7 @@ func run() -> void:
 	await capture("planning")
 	check(game.help_box.visible and game.movement_button.visible and game.fire_button.visible, "Basic actions and help are visible on first launch")
 	check(game.order_summary.text.contains("No shot queued"), "No implicit shot on startup")
+	check(game.display_contact.is_empty(), "No phantom contact on spawn before scanning or detecting enemy")
 	game.movement_button.pressed.emit()
 	check(game.input_mode == "move", "MOVE button selects destination input")
 	var start: Vector3 = game.player.position
@@ -55,7 +56,8 @@ func run() -> void:
 	check(game.phase == "ASSESSMENT", "Move completes in a five-second execution")
 	check(game.player.position.distance_to(destination) < 0.7, "Destination movement reaches the previewed point")
 	check(game.travel_target == null, "Reached destinations clear their route marker")
-	check(game.display_contact.time > displayed.time, "Accumulated acoustic report publishes at turn end")
+	var prev_time: float = displayed.get("time", -1.0)
+	check(game.display_contact.get("time", -1.0) > prev_time, "Accumulated acoustic report publishes at turn end")
 	game._queue_move(Vector3(-95, 0, 160))
 	check(game.travel_target == null and game.order_notice.contains("blocked"), "Route through warehouse cover is rejected with an explanation")
 	game._queue_scan()

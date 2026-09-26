@@ -74,8 +74,9 @@ func _draw() -> void:
 	# 2. Contact Track, Ghost Silhouette & Predicted Corridor
 	var track = game.player_track
 	var confirmed: bool = game.contact_is_visible()
+	var cam = game.camera
 	
-	if track != null and (track.has_silhouette or not game.display_contact.is_empty()):
+	if track != null and track.has_contact() and not game.display_contact.is_empty():
 		# A. Predicted Movement Corridor (if target was moving when lost)
 		if track.has_silhouette and not confirmed and track.estimated_speed_mps > 0.4:
 			var corridor = track.get_predicted_corridor(5.5)
@@ -83,13 +84,13 @@ func _draw() -> void:
 			var right_scr = PackedVector2Array()
 			var valid_corridor = true
 			for pt in corridor.left_edge:
-				if game.camera != null and game.camera.is_position_behind(pt):
+				if cam != null and cam.is_position_behind(pt):
 					valid_corridor = false
 					break
 				left_scr.append(screen(pt + Vector3.UP * 0.2))
 			if valid_corridor:
 				for pt in corridor.right_edge:
-					if game.camera != null and game.camera.is_position_behind(pt):
+					if cam != null and cam.is_position_behind(pt):
 						valid_corridor = false
 						break
 					right_scr.append(screen(pt + Vector3.UP * 0.2))
@@ -110,91 +111,104 @@ func _draw() -> void:
 			var ghost_yaw = track.silhouette_yaw
 			var ghost_basis = Basis(Vector3.UP, ghost_yaw)
 			
-			# Draw ghost tank hull box outline
-			var hl = 3.5 # half length
-			var hw = 1.7 # half width
-			var corners = [
-				ghost_pos + ghost_basis * Vector3(-hw, 0.3, -hl),
-				ghost_pos + ghost_basis * Vector3(hw, 0.3, -hl),
-				ghost_pos + ghost_basis * Vector3(hw, 0.3, hl),
-				ghost_pos + ghost_basis * Vector3(-hw, 0.3, hl)
-			]
-			var scr_corners = PackedVector2Array()
-			for c in corners: scr_corners.append(screen(c))
-			scr_corners.append(scr_corners[0])
+			if cam == null or not cam.is_position_behind(ghost_pos):
+				# Draw ghost tank hull box outline
+				var hl = 3.5 # half length
+				var hw = 1.7 # half width
+				var corners = [
+					ghost_pos + ghost_basis * Vector3(-hw, 0.3, -hl),
+					ghost_pos + ghost_basis * Vector3(hw, 0.3, -hl),
+					ghost_pos + ghost_basis * Vector3(hw, 0.3, hl),
+					ghost_pos + ghost_basis * Vector3(-hw, 0.3, hl)
+				]
+				var scr_corners = PackedVector2Array()
+				var valid_ghost = true
+				for c in corners:
+					if cam != null and cam.is_position_behind(c):
+						valid_ghost = false
+						break
+					scr_corners.append(screen(c))
+				if valid_ghost:
+					scr_corners.append(scr_corners[0])
+					draw_polyline(scr_corners, Color(AMBER.r, AMBER.g, AMBER.b, 0.65), 1.5, true)
+					var ghost_center = screen(ghost_pos + Vector3.UP * 0.5)
+					var ghost_h_pt = ghost_pos - ghost_basis.z * 4.0 + Vector3.UP * 0.5
+					if cam == null or not cam.is_position_behind(ghost_h_pt):
+						var ghost_heading_pt = screen(ghost_h_pt)
+						draw_dashed_line(ghost_center, ghost_heading_pt, Color(AMBER, 0.7), 1.5, 5.0, true)
+					
+					var age = maxf(0.0, game.sim_time - track.silhouette_time)
+					var spd_kmh = track.silhouette_speed_mps * 3.6
+					var ghost_txt = "LAST SEEN %.1fs AGO\nHDG: %03d° ±%d°\nSPD: %.0f km/h" % [
+						age,
+						int(track.silhouette_heading_deg),
+						int(track.heading_uncertainty),
+						spd_kmh
+					]
+					_tag(ghost_center + Vector2(0, 30), ghost_txt, AMBER)
 			
-			draw_polyline(scr_corners, Color(AMBER.r, AMBER.g, AMBER.b, 0.65), 2.0, true)
-			var ghost_center = screen(ghost_pos + Vector3.UP * 0.5)
-			var ghost_heading_pt = screen(ghost_pos - ghost_basis.z * 5.0 + Vector3.UP * 0.5)
-			draw_dashed_line(ghost_center, ghost_heading_pt, Color(AMBER, 0.7), 2.0, 5.0, true)
-			
-			var age = maxf(0.0, game.sim_time - track.silhouette_time)
-			var spd_kmh = track.silhouette_speed_mps * 3.6
-			var ghost_txt = "LAST SEEN %.1fs AGO\nHDG: %03d° ±%d°\nSPD: %.0f km/h" % [
-				age,
-				int(track.silhouette_heading_deg),
-				int(track.heading_uncertainty),
-				spd_kmh
-			]
-			_tag(ghost_center + Vector2(0, 30), ghost_txt, AMBER)
-			
-		# C. Current Estimated Position Area
+		# C. Current Estimated Position Area (Restrained, localized, clamped footprint)
 		var center: Vector3 = game.contact_visual_position
-		var radius: float = game.contact_visual_radius
-		var ring = PackedVector2Array()
-		for i in range(32):
-			var angle = i * TAU / 32.0
-			ring.append(screen(center + Vector3(cos(angle) * radius, 0.35, sin(angle) * radius)))
-			
-		var tint = RED if confirmed else AMBER
-		if _has_valid_poly_area(ring):
-			draw_colored_polygon(ring, Color(tint, 0.10))
-		for i in range(ring.size()):
-			var p1 = ring[i]
-			var p2 = ring[(i + 1) % ring.size()]
-			if confirmed or i % 4 < 2: draw_line(p1, p2, Color(tint, 0.85), 2, true)
-			
-		var middle = screen(center + Vector3.UP)
-		label_rects.append(Rect2(middle - Vector2(14, 14), Vector2(28, 28)))
-		draw_circle(middle, 11, Color(0.05, 0.07, 0.08, 0.95))
-		draw_arc(middle, 11, 0, TAU, 32, tint, 2, true)
-		draw_string(font, middle + Vector2(-4, 5), "!" if confirmed else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, tint)
-		
-		var top = middle.y
-		for point in ring: top = minf(top, point.y)
-		var label_lines: Array[String] = []
-		if confirmed:
-			label_lines.append("CONTACT A • SIGHTED")
-		elif track != null and track.has_silhouette:
-			label_lines.append("CONTACT A • LAST KNOWN")
-		else:
-			label_lines.append("CONTACT A • ESTIMATE")
-			
-		if track != null:
-			var hdg_deg = int(track.estimated_heading_deg)
-			var arrow_str = "↑ N"
-			if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
-			elif hdg_deg < 68: arrow_str = "↗ NE"
-			elif hdg_deg < 113: arrow_str = "→ E"
-			elif hdg_deg < 158: arrow_str = "↘ SE"
-			elif hdg_deg < 203: arrow_str = "↓ S"
-			elif hdg_deg < 248: arrow_str = "↙ SW"
-			elif hdg_deg < 293: arrow_str = "← W"
-			else: arrow_str = "↖ NW"
-			
-			if track.estimated_speed_mps > 0.3:
-				label_lines.append("%s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
-			else:
-				label_lines.append("STATIONARY")
+		if cam == null or not cam.is_position_behind(center):
+			var visual_r: float = 1.8 if confirmed else clampf(game.contact_visual_radius, 2.2, 5.5)
+			var ring_scr = PackedVector2Array()
+			var all_pts_valid = true
+			for i in range(24):
+				var angle = i * TAU / 24.0
+				var p3d = center + Vector3(cos(angle) * visual_r, 0.25, sin(angle) * visual_r)
+				if cam != null and cam.is_position_behind(p3d):
+					all_pts_valid = false
+					break
+				ring_scr.append(screen(p3d))
 				
-			label_lines.append("%.0f m ±%.0f m" % [track.estimated_range, track.range_uncertainty])
-			var conf_pct = int(track.identification_confidence * 100)
-			var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
-			label_lines.append("CONFIDENCE: %d%% · %s" % [conf_pct, sol_str])
-		else:
-			label_lines.append("%.0f m" % game.player.position.distance_to(center))
-			
-		_tag(Vector2(middle.x, top - 24), "\n".join(label_lines), tint)
+			var tint = RED if confirmed else AMBER
+			if all_pts_valid and ring_scr.size() >= 3:
+				if _has_valid_poly_area(ring_scr):
+					draw_colored_polygon(ring_scr, Color(tint.r, tint.g, tint.b, 0.08 if not confirmed else 0.14))
+				for i in range(ring_scr.size()):
+					var p1 = ring_scr[i]
+					var p2 = ring_scr[(i + 1) % ring_scr.size()]
+					if confirmed or i % 3 < 2:
+						draw_line(p1, p2, Color(tint.r, tint.g, tint.b, 0.60 if not confirmed else 0.90), 1.5, true)
+				
+			var badge_3d = center + Vector3(0, 1.2, 0)
+			if cam == null or not cam.is_position_behind(badge_3d):
+				var middle = screen(badge_3d)
+				label_rects.append(Rect2(middle - Vector2(12, 12), Vector2(24, 24)))
+				draw_circle(middle, 11, Color(0.04, 0.06, 0.08, 0.92))
+				draw_arc(middle, 11, 0, TAU, 32, tint, 1.5, true)
+				draw_string(font, middle + Vector2(-4, 5), "!" if confirmed else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, tint)
+				
+				var label_lines: Array[String] = []
+				if confirmed:
+					label_lines.append("CONTACT A • SIGHTED")
+				elif track.has_silhouette:
+					label_lines.append("CONTACT A • LAST KNOWN")
+				else:
+					label_lines.append("CONTACT A • ESTIMATE")
+					
+				var hdg_deg = int(track.estimated_heading_deg)
+				var arrow_str = "↑ N"
+				if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
+				elif hdg_deg < 68: arrow_str = "↗ NE"
+				elif hdg_deg < 113: arrow_str = "→ E"
+				elif hdg_deg < 158: arrow_str = "↘ SE"
+				elif hdg_deg < 203: arrow_str = "↓ S"
+				elif hdg_deg < 248: arrow_str = "↙ SW"
+				elif hdg_deg < 293: arrow_str = "← W"
+				else: arrow_str = "↖ NW"
+				
+				if track.estimated_speed_mps > 0.3:
+					label_lines.append("%s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
+				else:
+					label_lines.append("STATIONARY")
+					
+				label_lines.append("%.0f m ±%.0f m" % [track.estimated_range, track.range_uncertainty])
+				var conf_pct = int(track.identification_confidence * 100)
+				var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
+				label_lines.append("CONFIDENCE: %d%% · %s" % [conf_pct, sol_str])
+				
+				_tag(middle + Vector2(0, -32), "\n".join(label_lines), tint)
 
 	# 3. Destination Route
 	if game.travel_target != null:
@@ -210,13 +224,19 @@ func _draw() -> void:
 	# 4. Firing Solution & Aim Point
 	if game.aim_selected or game.fields.fire.button_pressed:
 		var point: Vector3 = game._planned_aim()
-		var aim = screen(Vector3(point.x, 0.5, point.z))
+		var aim_3d = Vector3(point.x, 0.5, point.z)
+		if cam != null and cam.is_position_behind(aim_3d):
+			return
+			
+		var aim = screen(aim_3d)
 		label_rects.append(Rect2(aim - Vector2(19, 19), Vector2(38, 38)))
 		var fired: bool = game.phase == "EXECUTION" and game.fields.fire.button_pressed and not game.player.shot_pending
 		var firing: bool = game.fields.fire.button_pressed and not fired
 		var tint = RED if firing else BLUE
-		var tank_pt = screen(game.player.position + Vector3.UP * 0.4)
-		if not fired: draw_dashed_line(tank_pt, aim, Color(tint, 0.7), 1.5, 6, true)
+		var tank_3d = game.player.position + Vector3.UP * 0.4
+		if not fired and (cam == null or not cam.is_position_behind(tank_3d)):
+			var tank_pt = screen(tank_3d)
+			draw_dashed_line(tank_pt, aim, Color(tint, 0.7), 1.5, 6, true)
 		for offset in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
 			draw_line(aim + offset * 6, aim + offset * 15, tint, 2, true)
 			
@@ -227,20 +247,33 @@ func _draw() -> void:
 			var center_pt = sol.ellipse_center
 			var major_dir = Vector3(sin(sol.ellipse_angle_rad), 0, -cos(sol.ellipse_angle_rad))
 			var minor_dir = major_dir.cross(Vector3.UP)
-			for i in range(49):
-				var ang = TAU * i / 48.0
-				var p3d = center_pt + major_dir * (cos(ang) * sol.ellipse_major_m) + minor_dir * (sin(ang) * sol.ellipse_minor_m)
-				ellipse_pts.append(screen(p3d + Vector3.UP * 0.4))
-			draw_polyline(ellipse_pts, Color(tint, 0.75), 1.5, true)
+			var visual_major = clampf(sol.ellipse_major_m, 1.8, 6.0)
+			var visual_minor = clampf(sol.ellipse_minor_m, 1.0, 4.0)
+			var valid_ellipse = true
+			for i in range(33):
+				var ang = TAU * i / 32.0
+				var p3d = center_pt + major_dir * (cos(ang) * visual_major) + minor_dir * (sin(ang) * visual_minor)
+				if cam != null and cam.is_position_behind(p3d):
+					valid_ellipse = false
+					break
+				ellipse_pts.append(screen(p3d + Vector3.UP * 0.2))
+			if valid_ellipse and ellipse_pts.size() >= 3:
+				draw_polyline(ellipse_pts, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
 			if firing:
 				_tag(aim + Vector2(0, 20), "AIM POINT • " + sol.solution_quality, tint)
 		else:
-			var spread: float = maxf(0.3, game.player.position.distance_to(point) * game._dispersion(game.player) * 2)
+			var spread: float = clampf(game.player.position.distance_to(point) * game._dispersion(game.player) * 2, 0.3, 5.0)
 			var ellipse = PackedVector2Array()
-			for i in range(49):
-				var angle = TAU * i / 48.0
-				ellipse.append(screen(Vector3(point.x, 0.5, point.z) + Vector3(cos(angle) * spread, 0, sin(angle) * spread)))
-			draw_polyline(ellipse, tint, 1, true)
+			var valid_ellipse = true
+			for i in range(33):
+				var angle = TAU * i / 32.0
+				var p3d = Vector3(point.x, 0.3, point.z) + Vector3(cos(angle) * spread, 0, sin(angle) * spread)
+				if cam != null and cam.is_position_behind(p3d):
+					valid_ellipse = false
+					break
+				ellipse.append(screen(p3d))
+			if valid_ellipse and ellipse.size() >= 3:
+				draw_polyline(ellipse, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
 			if firing:
 				_tag(aim + Vector2(0, 20), "FIRE TARGET", tint)
 

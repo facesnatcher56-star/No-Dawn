@@ -183,30 +183,20 @@ func _ready() -> void:
 	_build_ui()
 	_set_map_running(false)
 	
-	# Initial contact tracks set up from reconnaissance briefing
-	player_track.estimated_position = Vector3(-108, 0, 105)
-	player_track.last_observed_position = player_track.estimated_position
-	player_track.position_uncertainty = 35.0
-	player_track.range_uncertainty = 35.0
-	player_track.estimated_range = player.position.distance_to(player_track.estimated_position)
-	player_track.estimated_bearing_deg = 90.0
-	player_track.last_observation_time = 0.0
-	player_track.sources = ["Briefing / unconfirmed"]
-	player.contact = player_track.to_dict()
+	# Fresh engagement: zero contacts at spawn until detected by sensor model or active scan
+	player_track.last_observation_time = -1.0
+	player_track.sources.clear()
+	player.contact.clear()
 	
-	enemy_track.estimated_position = Vector3(-180, 0, 120)
-	enemy_track.last_observed_position = enemy_track.estimated_position
-	enemy_track.position_uncertainty = 35.0
-	enemy_track.range_uncertainty = 35.0
-	enemy_track.estimated_range = enemy.position.distance_to(enemy_track.estimated_position)
-	enemy_track.estimated_bearing_deg = 270.0
-	enemy_track.last_observation_time = 0.0
-	enemy_track.sources = ["Briefing"]
-	enemy.contact = enemy_track.to_dict()
+	enemy_track.last_observation_time = -1.0
+	enemy_track.sources.clear()
+	enemy.contact.clear()
 	
-	player_firing_solution = FiringSolution.calculate(player, player_track, rng)
+	player_firing_solution = null
+	display_contact.clear()
+	contact_visual_position = Vector3.ZERO
+	contact_visual_radius = 0.0
 	_publish_contact()
-	contact_visual_position = display_contact.position
 	_log("Systems operational. Tactical WEGO initialized.")
 
 func _apply_ghost_material(tank: A47_Mastodon_Vehicle) -> void:
@@ -845,12 +835,16 @@ func _clear_orders() -> void:
 	order_notice = "Orders cleared. Tank will hold position."
 
 func _queue_scan() -> void:
-	if not _can_edit_orders() or display_contact.is_empty(): return
-	_aim_at(display_contact.position)
+	if not _can_edit_orders(): return
+	if not display_contact.is_empty():
+		_aim_at(display_contact.position)
+	else:
+		var forward_aim = player.position - player.turret.global_basis.z * 50.0
+		_aim_at(forward_aim)
 	fields.engine.button_pressed = false
 	fields.observe.button_pressed = true
 	fields.light.button_pressed = true
-	order_notice = "Scan queued: listen and use the searchlight for 2 seconds."
+	order_notice = "Scan queued: sweep searchlight forward to search for contacts."
 	_append_action("scan", _planned_aim())
 	_log("SCAN appended. The light can reveal your position.")
 
@@ -1465,8 +1459,10 @@ func _evaluate_sensors(dt: float) -> void:
 	player_firing_solution = FiringSolution.calculate(player, player_track, rng)
 
 func _publish_contact() -> void:
-	if player_track != null and (player_track.has_visual_los or player_track.has_silhouette or player_track.position_uncertainty < 50.0):
+	if player_track != null and player_track.has_contact():
 		display_contact = player_track.to_dict()
+	else:
+		display_contact.clear()
 
 func contact_is_visible() -> bool:
 	return player_track != null and player_track.has_visual_los and (player_track.time_since_visual < 1.0)
@@ -1557,7 +1553,7 @@ func _refresh_orders() -> void:
 		movement_button.disabled = not player.model.can_move()
 		fire_button.disabled = not player.model.can_fire()
 		contact_fire_button.disabled = not player.model.can_fire() or display_contact.is_empty()
-		scan_button.disabled = display_contact.is_empty()
+		scan_button.disabled = false
 
 func _process(delta: float) -> void:
 	if not is_instance_valid(player): return
@@ -1586,9 +1582,9 @@ func _process(delta: float) -> void:
 	var visible_contact = contact_is_visible()
 	enemy.visible = visible_contact
 
-	if player_track != null and not display_contact.is_empty():
+	if player_track != null and player_track.has_contact() and not display_contact.is_empty():
 		var age = sim_time - player_track.last_observation_time
-		var radius: float = maxf(1.5, player_track.position_uncertainty)
+		var radius: float = 1.8 if visible_contact else clampf(player_track.position_uncertainty * 0.25, 2.2, 5.5)
 		var blend = 1.0 - exp(-delta * 6)
 		contact_visual_position = contact_visual_position.lerp(player_track.estimated_position, blend)
 		contact_visual_radius = lerpf(contact_visual_radius, radius, blend)
@@ -1605,6 +1601,10 @@ func _process(delta: float) -> void:
 			sol_quality,
 			age
 		]
+	else:
+		contact_visual_radius = 0.0
+		if contact_label != null:
+			contact_label.text = "NO CONTACTS\n========================================\nNo enemy contacts currently detected.\n\n• Use [SCAN FOR ENEMY] to sweep searchlight\n• Advance along avenue to acquire visual LOS\n• Listen for enemy engine or weapon reports"
 	
 	# Update in-world 3D Ghost Tank
 	if ghost_tank != null:
