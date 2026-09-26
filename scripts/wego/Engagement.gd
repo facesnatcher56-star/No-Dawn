@@ -23,9 +23,9 @@ var ghost_tank: A47_Mastodon_Vehicle
 # 3D Tactical Perspective Camera
 var cam_target: Vector3 = Vector3(-175, 0, 110)
 var cam_yaw: float = deg_to_rad(-65.0)
-var cam_pitch: float = deg_to_rad(-40.0)
-var cam_distance: float = 46.0
-var cam_fov: float = 58.0
+var cam_pitch: float = deg_to_rad(-22.0)
+var cam_distance: float = 24.0
+var cam_fov: float = 52.0
 var cam_shake: float = 0.0
 var is_orbiting: bool = false
 var last_mouse_pos: Vector2 = Vector2.ZERO
@@ -230,8 +230,8 @@ func _update_camera(delta: float) -> void:
 	
 	if delta > 0.0:
 		if phase == "EXECUTION":
-			var target_pitch = deg_to_rad(-28.0)
-			var target_dist = 28.0
+			var target_pitch = deg_to_rad(-20.0)
+			var target_dist = 22.0
 			if not is_orbiting:
 				cam_pitch = lerpf(cam_pitch, target_pitch, delta * 2.0)
 				cam_distance = lerpf(cam_distance, target_dist, delta * 2.0)
@@ -394,7 +394,7 @@ func _build_ui() -> void:
 	var overlay = Overlay.new()
 	overlay.game = self
 	root.add_child(overlay)
-	var left = _panel(root, 0, 0, 0.22, 1.0)
+	var left = _panel(root, 0, 0, 0.19, 1.0)
 	left_drawer = left.get_parent().get_parent()
 	var left_header = HBoxContainer.new()
 	left.add_child(left_header)
@@ -529,8 +529,9 @@ func _build_ui() -> void:
 	_button(left, "Restart engagement", func(): get_tree().reload_current_scene(), 26)
 	controls.pop_back()
 	controls.erase(advanced_toggle)
-	var right = _panel(root, 0.78, 0, 1.0, 1.0)
+	var right = _panel(root, 0.81, 0, 1.0, 1.0)
 	right_drawer = right.get_parent().get_parent()
+	right_drawer.visible = false
 	var right_header = HBoxContainer.new()
 	right.add_child(right_header)
 	var right_title = _label(right_header, "INTELLIGENCE", 18)
@@ -980,7 +981,8 @@ func _execute() -> void:
 	_event("SIMULTANEOUS EXECUTION (%s, %.0fs): Both sides acting." % ["COMBAT" if p_mode == WegoTimeline.PulseMode.COMBAT else "MANEUVER", timeline.pulse_duration])
 	if plan.has("destination"): _event("YOU: advancing toward destination.")
 	if plan.light: _event("YOU: sweeping searchlight for 2 seconds.")
-	
+	if left_drawer: left_drawer.visible = false
+	if right_drawer: right_drawer.visible = false
 	execute_button.disabled = true
 	for control in controls:
 		if control is SpinBox: control.editable = false
@@ -1141,6 +1143,7 @@ func _finish_execution() -> void:
 		pulse_mode_label.text = "%s MODE (%.0fs pulse)" % [mode_name, next_duration]
 		pulse_mode_label.add_theme_color_override("font_color", Color("ff9b86") if next_mode == WegoTimeline.PulseMode.COMBAT else Color("8cddf0"))
 		
+	if left_drawer: left_drawer.visible = true
 	execute_button.disabled = false
 	var has_ongoing = travel_target != null or not action_queue.actions.is_empty()
 	execute_button.text = ("CONTINUE ORDERS (%.0fs)" if has_ongoing else "EXECUTE NEXT (%.0fs)") % next_duration
@@ -1521,6 +1524,7 @@ func _refresh_orders() -> void:
 	execution_progress.max_value = p_dur
 	execution_progress.value = p_dur - time_left if phase == "EXECUTION" else 0
 	if phase == "EXECUTION":
+		action_hint.add_theme_color_override("font_color", Color(1.0, 0.82, 0.28))
 		if not playback.active.is_empty():
 			action_hint.text = "IMPACT REPLAY: " + _shot_title(playback.active)
 		elif playback.paused:
@@ -1528,20 +1532,25 @@ func _refresh_orders() -> void:
 		elif playback.shot_focus > 0:
 			action_hint.text = "SLOW-MOTION REPLAY"
 		else:
-			action_hint.text = "EXECUTING SIMULTANEOUSLY: %.1fs / %.0fs" % [p_dur - time_left, p_dur]
+			action_hint.text = "EXECUTING: %.1f → 0.0 SEC (PULSE IN PROGRESS)" % time_left
 		execute_button.text = "RESUME ▶ (%.1fs)" % time_left if _can_edit_orders() else "RUNNING (%.1fs)" % time_left
 		execute_button.disabled = not _can_edit_orders()
 	elif phase == "COMPLETE":
+		action_hint.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 		action_hint.text = phase_report
 		execute_button.text = "ENGAGEMENT COMPLETE"
 	elif input_mode == "move":
+		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
 		action_hint.text = order_notice if not order_notice.is_empty() else "Click ground to set move destination"
 	elif input_mode in ["aim", "hull"]:
+		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
 		action_hint.text = "Click direction to orient " + ("turret" if input_mode == "aim" else "hull")
 	elif input_mode == "fire":
+		action_hint.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35))
 		action_hint.text = "Click target location to aim & fire"
 	else:
-		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "")
+		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
+		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — ORDERS NOT EXECUTING")
 	if phase not in ["EXECUTION", "COMPLETE"]:
 		var has_orders = travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty()
 		execute_button.text = "EXECUTE ORDERS  ▶" if has_orders else "EXECUTE / WAIT %.0fs" % p_dur
@@ -1681,10 +1690,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				order_notice = "Target selection cancelled. Use CLEAR ALL to remove queued orders."
 		elif event.pressed:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				cam_distance = clampf(cam_distance - 4.0, 14.0, 140.0)
+				cam_distance = clampf(cam_distance - 2.5, 8.0, 65.0)
 				zoom = clampf(zoom - 8.0, 35.0, 200.0)
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				cam_distance = clampf(cam_distance + 4.0, 14.0, 140.0)
+				cam_distance = clampf(cam_distance + 2.5, 8.0, 65.0)
 				zoom = clampf(zoom + 8.0, 35.0, 200.0)
 			elif event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
 				var ray = camera.project_ray_origin(event.position)

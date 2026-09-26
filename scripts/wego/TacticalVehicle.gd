@@ -81,8 +81,8 @@ func _ready() -> void:
 	# Instantiate the real high-detail A-47 Mastodon vehicle model
 	visual_tank = MASTODON_SCENE.instantiate()
 	add_child(visual_tank)
-	if color != Color("657665"):
-		_apply_enemy_camo()
+	visual_tank.set_display_mode(MastodonVisualController.DisplayMode.NORMAL)
+	_apply_tactical_materials(color != Color("657665"))
 
 	lamp = SpotLight3D.new()
 	turret.add_child(lamp)
@@ -106,15 +106,87 @@ func set_debug_visuals(enabled: bool) -> void:
 		if is_instance_valid(b):
 			b.visible = enabled
 
-func _apply_enemy_camo() -> void:
+func _apply_tactical_materials(is_enemy: bool) -> void:
 	if visual_tank == null or visual_tank.visual == null: return
-	var enemy_mat = StandardMaterial3D.new()
-	enemy_mat.albedo_color = Color(0.62, 0.56, 0.42) # Weathered Dunkelgelb
-	enemy_mat.roughness = 0.86
-	enemy_mat.metallic = 0.25
-	for arm_node in visual_tank.visual.nodes_by_category["ARM"]:
-		if arm_node is MeshInstance3D:
-			arm_node.material_override = enemy_mat
+	
+	# 1. Exterior Rolled Homogeneous Armor
+	var armor_mat = StandardMaterial3D.new()
+	if is_enemy:
+		armor_mat.albedo_color = Color(0.48, 0.42, 0.28) # Weathered Dunkelgelb tan
+		armor_mat.roughness = 0.78
+		armor_mat.metallic = 0.32
+	else:
+		armor_mat.albedo_color = Color(0.20, 0.25, 0.17) # Deep tactical olive drab
+		armor_mat.roughness = 0.70
+		armor_mat.metallic = 0.36
+		
+	# 2. Heavy Cast Armor (Gun mantlet, cupola, turret front)
+	var cast_mat = StandardMaterial3D.new()
+	if is_enemy:
+		cast_mat.albedo_color = Color(0.38, 0.33, 0.22)
+		cast_mat.roughness = 0.86
+		cast_mat.metallic = 0.45
+	else:
+		cast_mat.albedo_color = Color(0.13, 0.15, 0.14)
+		cast_mat.roughness = 0.84
+		cast_mat.metallic = 0.52
+		
+	# 3. Dark Blued Ordnance Gunmetal (128mm barrel, muzzle brake, breech ring)
+	var gun_mat = StandardMaterial3D.new()
+	gun_mat.albedo_color = Color(0.08, 0.09, 0.11)
+	gun_mat.roughness = 0.28
+	gun_mat.metallic = 0.90
+	
+	# 4. Manganese Steel Track Links
+	var track_mat = StandardMaterial3D.new()
+	track_mat.albedo_color = Color(0.09, 0.09, 0.10)
+	track_mat.roughness = 0.82
+	track_mat.metallic = 0.72
+	
+	# 5. Road Wheel Solid Rubber Tires
+	var rubber_mat = StandardMaterial3D.new()
+	rubber_mat.albedo_color = Color(0.05, 0.05, 0.06)
+	rubber_mat.roughness = 0.94
+	rubber_mat.metallic = 0.05
+	
+	# 6. Dark Louver / Exhaust Iron
+	var iron_mat = StandardMaterial3D.new()
+	iron_mat.albedo_color = Color(0.12, 0.11, 0.10)
+	iron_mat.roughness = 0.75
+	iron_mat.metallic = 0.60
+	
+	# Apply to ARM plates
+	for node in visual_tank.visual.nodes_by_category["ARM"]:
+		if node is MeshInstance3D:
+			var n_name = node.name
+			if "Mantlet" in n_name or "Cupola" in n_name or "TurretFront" in n_name:
+				node.material_override = cast_mat
+			else:
+				node.material_override = armor_mat
+				
+	# Apply to VIS exterior equipment & running gear
+	for node in visual_tank.visual.nodes_by_category["VIS"]:
+		if node is MeshInstance3D:
+			var n_name = node.name
+			if "Barrel" in n_name or "Muzzle" in n_name or "Breech" in n_name:
+				node.material_override = gun_mat
+			elif "Track" in n_name or "Fender" in n_name or "Skirts" in n_name:
+				node.material_override = track_mat
+			elif "Grille" in n_name or "Exhaust" in n_name or "Vent" in n_name:
+				node.material_override = iron_mat
+			elif "Antenna" in n_name or "Mount" in n_name:
+				node.material_override = gun_mat
+				
+	# Apply to CMP running gear (tracks, road wheels, sprockets, idlers)
+	for node in visual_tank.visual.nodes_by_category["CMP"]:
+		if node is MeshInstance3D:
+			var n_name = node.name
+			if "Track" in n_name:
+				node.material_override = track_mat
+			elif "Wheel" in n_name:
+				node.material_override = rubber_mat
+			elif "Idler" in n_name or "Sprocket" in n_name or "Suspension" in n_name:
+				node.material_override = track_mat
 
 func commit(plan: Dictionary) -> void:
 	orders = plan.duplicate(true)

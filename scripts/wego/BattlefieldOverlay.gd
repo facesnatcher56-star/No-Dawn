@@ -61,25 +61,15 @@ func _draw() -> void:
 	label_rects.clear()
 	if game == null or not is_instance_valid(game.player): return
 	
-	# 1. Player Vehicle Indicator
-	var tank = screen(game.player.position + Vector3.UP)
-	label_rects.append(Rect2(tank - Vector2(19, 19), Vector2(38, 38)))
-	draw_arc(tank, 16, 0, TAU, 40, BLUE, 2, true)
-	var forward = screen(game.player.position - game.player.global_basis.z * 8 + Vector3.UP)
-	draw_line(tank, forward, BLUE, 2, true)
-	var arrow = (forward - tank).normalized()
-	draw_colored_polygon(PackedVector2Array([forward + arrow * 5, forward - arrow.rotated(0.6) * 8, forward - arrow.rotated(-0.6) * 8]), BLUE)
-	var gun_forward = screen(game.player.position - game.player.turret.global_basis.z * 13 + Vector3.UP)
-	draw_line(tank, gun_forward, Color("b4edb2"), 3, true)
-	draw_circle(gun_forward, 3, Color("b4edb2"))
-	
+	# 1. Player Vehicle Status (Non-intrusive activity tag during execution only)
 	if game.phase == "EXECUTION":
+		var tank = screen(game.player.position + Vector3.UP * 1.8)
 		var activity = ""
 		if game.player.speed > 0.1: activity = "MOVING"
 		elif game.travel_target != null: activity = "TURNING"
 		elif game.player.shot_pending: activity = "FIRING"
 		if not activity.is_empty():
-			_tag(tank + Vector2(0, 24), activity, BLUE)
+			_tag(tank + Vector2(0, -32), activity, BLUE)
 			
 	# 2. Contact Track, Ghost Silhouette & Predicted Corridor
 	var track = game.player_track
@@ -172,15 +162,46 @@ func _draw() -> void:
 		
 		var top = middle.y
 		for point in ring: top = minf(top, point.y)
-		var label_str = "CONTACT A" + (" • SIGHTED" if confirmed else "")
-		if track != null and track.gunner_acquired: label_str += " [GUNNER ACQUIRED]"
-		_tag(Vector2(middle.x, top - 24), label_str, tint)
+		var label_lines: Array[String] = []
+		if confirmed:
+			label_lines.append("CONTACT A • SIGHTED")
+		elif track != null and track.has_silhouette:
+			label_lines.append("CONTACT A • LAST KNOWN")
+		else:
+			label_lines.append("CONTACT A • ESTIMATE")
+			
+		if track != null:
+			var hdg_deg = int(track.estimated_heading_deg)
+			var arrow_str = "↑ N"
+			if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
+			elif hdg_deg < 68: arrow_str = "↗ NE"
+			elif hdg_deg < 113: arrow_str = "→ E"
+			elif hdg_deg < 158: arrow_str = "↘ SE"
+			elif hdg_deg < 203: arrow_str = "↓ S"
+			elif hdg_deg < 248: arrow_str = "↙ SW"
+			elif hdg_deg < 293: arrow_str = "← W"
+			else: arrow_str = "↖ NW"
+			
+			if track.estimated_speed_mps > 0.3:
+				label_lines.append("%s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
+			else:
+				label_lines.append("STATIONARY")
+				
+			label_lines.append("%.0f m ±%.0f m" % [track.estimated_range, track.range_uncertainty])
+			var conf_pct = int(track.identification_confidence * 100)
+			var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
+			label_lines.append("CONFIDENCE: %d%% · %s" % [conf_pct, sol_str])
+		else:
+			label_lines.append("%.0f m" % game.player.position.distance_to(center))
+			
+		_tag(Vector2(middle.x, top - 24), "\n".join(label_lines), tint)
 
 	# 3. Destination Route
 	if game.travel_target != null:
+		var tank_screen = screen(game.player.position + Vector3.UP * 0.4)
 		var destination = screen(game.travel_target + Vector3.UP * 0.4)
 		label_rects.append(Rect2(destination - Vector2(14, 14), Vector2(28, 28)))
-		draw_dashed_line(tank, destination, BLUE, 2, 7, true)
+		draw_dashed_line(tank_screen, destination, BLUE, 2, 7, true)
 		draw_arc(destination, 10, 0, TAU, 32, BLUE, 2, true)
 		draw_line(destination + Vector2(-6, 0), destination + Vector2(6, 0), BLUE, 2)
 		draw_line(destination + Vector2(0, -6), destination + Vector2(0, 6), BLUE, 2)
@@ -194,7 +215,8 @@ func _draw() -> void:
 		var fired: bool = game.phase == "EXECUTION" and game.fields.fire.button_pressed and not game.player.shot_pending
 		var firing: bool = game.fields.fire.button_pressed and not fired
 		var tint = RED if firing else BLUE
-		if not fired: draw_dashed_line(tank, aim, Color(tint, 0.7), 1.5, 6, true)
+		var tank_pt = screen(game.player.position + Vector3.UP * 0.4)
+		if not fired: draw_dashed_line(tank_pt, aim, Color(tint, 0.7), 1.5, 6, true)
 		for offset in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
 			draw_line(aim + offset * 6, aim + offset * 15, tint, 2, true)
 			
@@ -233,9 +255,15 @@ func _draw() -> void:
 		var lane = direction.orthogonal() * 3
 		if event.known_origin: draw_line(start + lane, end + lane, tint, 3, true)
 		else: draw_dashed_line(start + lane, end + lane, tint, 2, 7, true)
-		if start.distance_to(end) > 8:
+		if start.distance_to(end) > 16.0 and not direction.is_zero_approx():
 			var arrow_tip = start.lerp(end, 0.65) + lane
-			draw_colored_polygon(PackedVector2Array([arrow_tip + direction * 9, arrow_tip - direction.rotated(0.5) * 9, arrow_tip - direction.rotated(-0.5) * 9]), tint)
+			var poly = PackedVector2Array([
+				arrow_tip + direction * 8.0,
+				arrow_tip - direction.rotated(0.45) * 8.0,
+				arrow_tip - direction.rotated(-0.45) * 8.0
+			])
+			if _has_valid_poly_area(poly):
+				draw_colored_polygon(poly, tint)
 		var age: float = game.shot_clock - event.fired
 		if age < 1.5: draw_arc(start, 12 + age * 12, 0, TAU, 32, Color(tint, 1 - age / 1.5), 3, true)
 		if event.result != "IN FLIGHT":

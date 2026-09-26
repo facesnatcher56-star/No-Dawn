@@ -26,7 +26,7 @@ func _init_materials() -> void:
 
 	mat_cone = StandardMaterial3D.new()
 	mat_cone.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat_cone.albedo_color = Color(0.35, 0.82, 0.75, 0.12) # Subtle cyan observation
+	mat_cone.albedo_color = Color(0.20, 0.45, 0.65, 0.025) # Whisper-faint transparent observation sector
 	mat_cone.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat_cone.cull_mode = BaseMaterial3D.CULL_DISABLED
 

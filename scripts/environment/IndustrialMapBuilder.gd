@@ -13,6 +13,8 @@ var mat_fire: StandardMaterial3D
 var mat_road: StandardMaterial3D
 var mat_berm: StandardMaterial3D
 var mat_stripe: StandardMaterial3D
+var mat_wood: StandardMaterial3D
+var mat_tarp: StandardMaterial3D
 
 var blast_furnace_scene = preload("res://scenes/BlastFurnace.tscn")
 var steam_hammer_scene = preload("res://scenes/SteamHammer.tscn")
@@ -47,6 +49,14 @@ func _init_materials() -> void:
 	mat_stripe = StandardMaterial3D.new()
 	mat_stripe.albedo_color = Color(0.78, 0.76, 0.68)
 	mat_stripe.roughness = 0.9
+
+	mat_wood = StandardMaterial3D.new()
+	mat_wood.albedo_color = Color(0.28, 0.22, 0.16)
+	mat_wood.roughness = 0.92
+
+	mat_tarp = StandardMaterial3D.new()
+	mat_tarp.albedo_color = Color(0.18, 0.24, 0.20)
+	mat_tarp.roughness = 0.85
 
 	mat_brick = StandardMaterial3D.new()
 	mat_brick.albedo_color = Color(0.42, 0.24, 0.18)
@@ -189,6 +199,25 @@ func _create_warehouse_shell(pos: Vector3, size: Vector3) -> void:
 	var h = size.y
 
 	_create_wall(pos + Vector3(0, h * 0.5, -half_d), Vector3(size.x, h, 2.0), mat_brick)
+
+	# Architectural plinth base (visual-only concrete base)
+	var plinth_back = MeshInstance3D.new()
+	var pm_b = BoxMesh.new()
+	pm_b.size = Vector3(size.x + 0.6, 0.9, 2.4)
+	pm_b.material = mat_concrete
+	plinth_back.mesh = pm_b
+	plinth_back.position = pos + Vector3(0, 0.45, -half_d)
+	add_child(plinth_back)
+
+	# Steel coping along top rim of back wall
+	var coping_back = MeshInstance3D.new()
+	var cm_b = BoxMesh.new()
+	cm_b.size = Vector3(size.x + 0.4, 0.35, 2.4)
+	cm_b.material = mat_steel
+	coping_back.mesh = cm_b
+	coping_back.position = pos + Vector3(0, h + 0.17, -half_d)
+	add_child(coping_back)
+
 	_create_wall(pos + Vector3(-half_w * 0.55, h * 0.5, half_d), Vector3(size.x * 0.4, h, 2.0), mat_brick)
 	_create_wall(pos + Vector3(half_w * 0.55, h * 0.5, half_d), Vector3(size.x * 0.4, h, 2.0), mat_brick)
 
@@ -406,7 +435,7 @@ func _create_lamp_post(pos: Vector3) -> void:
 	add_child(light)
 
 func _build_tactical_terrain_and_ridges() -> void:
-	# 1. Paved Roadway with asphalt pad and center marking stripes
+	# 1. Paved North-South Roadway with asphalt pad and center marking stripes
 	var road = MeshInstance3D.new()
 	var road_mesh = BoxMesh.new()
 	road_mesh.size = Vector3(14.0, 0.04, 520.0)
@@ -423,6 +452,64 @@ func _build_tactical_terrain_and_ridges() -> void:
 		stripe.mesh = sm
 		stripe.position = Vector3(-60.0, 0.03, float(sz))
 		add_child(stripe)
+
+	# 1b. East-West Industrial Transit Avenue along Z = 110.0 (tactical maneuver corridor)
+	var avenue = MeshInstance3D.new()
+	var avenue_mesh = BoxMesh.new()
+	avenue_mesh.size = Vector3(300.0, 0.04, 12.0)
+	avenue_mesh.material = mat_road
+	avenue.mesh = avenue_mesh
+	avenue.position = Vector3(-85.0, 0.02, 110.0)
+	add_child(avenue)
+
+	for ax in range(-220, 50, 16):
+		var astripe = MeshInstance3D.new()
+		var asm = BoxMesh.new()
+		asm.size = Vector3(6.0, 0.06, 0.4)
+		asm.material = mat_stripe
+		astripe.mesh = asm
+		astripe.position = Vector3(float(ax), 0.03, 110.0)
+		add_child(astripe)
+
+	# 1c. Elevated concrete road curbs (visual-only, no colliders)
+	for x_side in [-67.2, -52.8]:
+		var curb_ns = MeshInstance3D.new()
+		var cm_ns = BoxMesh.new()
+		cm_ns.size = Vector3(0.35, 0.16, 520.0)
+		cm_ns.material = mat_concrete
+		curb_ns.mesh = cm_ns
+		curb_ns.position = Vector3(x_side, 0.08, 0.0)
+		add_child(curb_ns)
+
+	for z_side in [103.8, 116.2]:
+		var curb_ew = MeshInstance3D.new()
+		var cm_ew = BoxMesh.new()
+		cm_ew.size = Vector3(300.0, 0.16, 0.35)
+		cm_ew.material = mat_concrete
+		curb_ew.mesh = cm_ew
+		curb_ew.position = Vector3(-85.0, 0.08, z_side)
+		add_child(curb_ew)
+
+	# 1d. Roadside infrastructure props (safely outside maneuver swept corridor Z=106..114)
+	# Street lamps along Z = 117.5 (north of curb)
+	for lx in [-170, -135, -100, -30, 20]:
+		_create_lamp_post(Vector3(float(lx), 0.0, 117.5))
+
+	# Utility power poles along Z = 102.5 (south of curb)
+	for px in [-180, -145, -110, -40, 10]:
+		_create_utility_pole(Vector3(float(px), 0.0, 102.5))
+
+	# Visual concrete barricades / jersey barriers along curbs
+	_create_jersey_barrier(Vector3(-160.0, 0.0, 117.2))
+	_create_jersey_barrier(Vector3(-120.0, 0.0, 117.2))
+	_create_jersey_barrier(Vector3(-140.0, 0.0, 102.8))
+	_create_jersey_barrier(Vector3(-80.0, 0.0, 102.8))
+	_create_jersey_barrier(Vector3(30.0, 0.0, 117.2))
+
+	# Oil drum pallet clusters near sidings
+	_create_drum_pallet(Vector3(-175.0, 0.0, 118.5))
+	_create_drum_pallet(Vector3(-125.0, 0.0, 101.5))
+	_create_drum_pallet(Vector3(-65.0, 0.0, 119.0))
 
 	# 2. Hull-Down Tactical Ridges & Earth Berms
 	# Central ridge crossing between warehouses
@@ -529,3 +616,66 @@ func _create_smoke_plume(pos: Vector3) -> void:
 	particles.draw_pass_1 = pmesh
 
 	add_child(particles)
+
+func _create_utility_pole(pos: Vector3) -> void:
+	var pole = MeshInstance3D.new()
+	var pm = CylinderMesh.new()
+	pm.top_radius = 0.16
+	pm.bottom_radius = 0.22
+	pm.height = 9.0
+	pm.material = mat_wood
+	pole.mesh = pm
+	pole.position = pos + Vector3(0, 4.5, 0)
+	add_child(pole)
+
+	# Crossarm
+	var arm = MeshInstance3D.new()
+	var am = BoxMesh.new()
+	am.size = Vector3(2.4, 0.16, 0.16)
+	am.material = mat_wood
+	arm.mesh = am
+	arm.position = pos + Vector3(0, 8.2, 0)
+	add_child(arm)
+
+	# Ceramic insulators
+	for ix in [-0.9, 0.0, 0.9]:
+		var ins = MeshInstance3D.new()
+		var im = CylinderMesh.new()
+		im.top_radius = 0.06
+		im.bottom_radius = 0.06
+		im.height = 0.22
+		im.material = mat_concrete
+		ins.mesh = im
+		ins.position = pos + Vector3(ix, 8.4, 0)
+		add_child(ins)
+
+func _create_jersey_barrier(pos: Vector3, rot_y: float = 0.0) -> void:
+	var barrier = MeshInstance3D.new()
+	var bm = BoxMesh.new()
+	bm.size = Vector3(3.0, 0.85, 0.6)
+	bm.material = mat_concrete
+	barrier.mesh = bm
+	barrier.position = pos + Vector3(0, 0.42, 0)
+	barrier.rotation.y = rot_y
+	add_child(barrier)
+
+func _create_drum_pallet(pos: Vector3) -> void:
+	var pallet = MeshInstance3D.new()
+	var pm = BoxMesh.new()
+	pm.size = Vector3(1.6, 0.14, 1.6)
+	pm.material = mat_wood
+	pallet.mesh = pm
+	pallet.position = pos + Vector3(0, 0.07, 0)
+	add_child(pallet)
+
+	for ox in [-0.38, 0.38]:
+		for oz in [-0.38, 0.38]:
+			var drum = MeshInstance3D.new()
+			var dm = CylinderMesh.new()
+			dm.top_radius = 0.3
+			dm.bottom_radius = 0.3
+			dm.height = 0.95
+			dm.material = mat_rust if (ox > 0) else mat_steel
+			drum.mesh = dm
+			drum.position = pos + Vector3(ox, 0.61, oz)
+			add_child(drum)

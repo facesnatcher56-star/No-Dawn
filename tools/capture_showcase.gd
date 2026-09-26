@@ -44,11 +44,13 @@ func _on_process_frame() -> void:
 			print("Setting up Shot 1: Normal planning view...")
 			game.left_drawer.visible = false
 			game.right_drawer.visible = false
-			game.cam_target = Vector3(-175, 0, 110)
+			game.cam_target = Vector3(-178, 0, 110)
 			game.cam_yaw = deg_to_rad(-65.0)
-			game.cam_pitch = deg_to_rad(-35.0)
-			game.cam_distance = 46.0
+			game.cam_pitch = deg_to_rad(-22.0)
+			game.cam_distance = 24.0
 			game._update_camera(0.0)
+			game.action_hint.text = "PLANNING — ORDERS NOT EXECUTING"
+			game.action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
 			game.radio_callout_label.text = "RADIO: 1ST PLATOON ADVANCING ALONG AXIS ALPHA • OVERCAST CONDITIONS"
 			game.radio_callout_label.get_parent().visible = true
 			game.tank_card_label.text = "A-47 MASTODON • OPERATIONAL\nAMMO: 25/25 AP • SPEED: 0.0 m/s\nCREW STATIONS GREEN • 128mm READY"
@@ -70,10 +72,10 @@ func _on_process_frame() -> void:
 			_save_screenshot("02_close_view_player_tank.png")
 			# Setup 3: Movement path planning
 			print("Setting up Shot 3: Movement path planning...")
-			game.cam_target = Vector3(-160, 0, 110)
-			game.cam_yaw = deg_to_rad(-70.0)
-			game.cam_pitch = deg_to_rad(-38.0)
-			game.cam_distance = 52.0
+			game.cam_target = Vector3(-168, 0, 110)
+			game.cam_yaw = deg_to_rad(-65.0)
+			game.cam_pitch = deg_to_rad(-22.0)
+			game.cam_distance = 28.0
 			game._update_camera(0.0)
 			game.travel_target = Vector3(-140, 0, 110)
 			game.world_graphics.update_route(game.player.global_position, game.travel_target, [], true)
@@ -108,8 +110,8 @@ func _on_process_frame() -> void:
 			game.world_graphics.update_observation(game.player.position, game.player.rotation.y + game.player.model.turret_yaw, true)
 			game.cam_target = (game.player.position + game.enemy.position) * 0.5 + Vector3(0, 1.2, 0)
 			game.cam_yaw = deg_to_rad(-65.0)
-			game.cam_pitch = deg_to_rad(-24.0)
-			game.cam_distance = 38.0
+			game.cam_pitch = deg_to_rad(-20.0)
+			game.cam_distance = 30.0
 			game._update_camera(0.0)
 			game.radio_callout_label.text = "GUNNER: TARGET IDENTIFIED! ENEMY HEAVY TANK SIGHTED AT 40 METERS"
 			frame_wait = 20
@@ -136,8 +138,8 @@ func _on_process_frame() -> void:
 			game.world_graphics.update_predicted_corridor(game.player_track.get_predicted_corridor(5.5), true)
 			game.cam_target = (game.player.position + game.player_track.silhouette_position) * 0.5 + Vector3(0, 1.2, 0)
 			game.cam_yaw = deg_to_rad(-65.0)
-			game.cam_pitch = deg_to_rad(-24.0)
-			game.cam_distance = 40.0
+			game.cam_pitch = deg_to_rad(-20.0)
+			game.cam_distance = 32.0
 			game._update_camera(0.0)
 			game.radio_callout_label.text = "COMMANDER: VISUAL LOST • TRACKING LAST-KNOWN GHOST & PREDICTED CORRIDOR"
 			frame_wait = 20
@@ -149,10 +151,13 @@ func _on_process_frame() -> void:
 			game.ghost_tank.visible = false
 			game.world_graphics.update_predicted_corridor({}, false)
 			game.world_graphics.update_observation(game.player.position, 0.0, false)
+			game.left_drawer.visible = false
+			game.right_drawer.visible = false
 			game.phase = "EXECUTION"
 			game.time_left = 3.2
 			game.execution_progress.value = 1.8
-			game.action_hint.text = "WEGO EXECUTION ACTIVE · 3.2s REMAINING"
+			game.action_hint.text = "EXECUTING: 3.2 → 0.0 SEC (PULSE IN PROGRESS)"
+			game.action_hint.add_theme_color_override("font_color", Color(1.0, 0.82, 0.28))
 			game.radio_callout_label.text = "TACTICAL: SIMULTANEOUS EXECUTION IN PROGRESS • ADVANCING TO ENGAGEMENT LINE"
 			game.player.speed = 4.5
 			game.enemy.speed = 4.0
