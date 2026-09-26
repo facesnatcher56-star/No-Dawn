@@ -37,44 +37,57 @@ def get_or_create_material(name, base_color, metallic=0.0, roughness=0.5, specul
 
 def create_all_materials():
     materials = {
+        # Exterior rolled armor: desaturated dark slate-olive green
         "MAT_Armor_Exterior": get_or_create_material(
-            "MAT_Armor_Exterior", (0.28, 0.33, 0.26, 1.0), metallic=0.72, roughness=0.55
+            "MAT_Armor_Exterior", (0.22, 0.26, 0.20, 1.0), metallic=0.74, roughness=0.52
         ),
+        # Interior painted armor: Elfenbein (warm ivory white for maximum cutaway visibility)
         "MAT_Armor_Interior": get_or_create_material(
-            "MAT_Armor_Interior", (0.88, 0.87, 0.82, 1.0), metallic=0.08, roughness=0.60
+            "MAT_Armor_Interior", (0.88, 0.86, 0.80, 1.0), metallic=0.06, roughness=0.62
         ),
+        # Cast armor steel: pitted, heavy texture for mantlet, cupola, and nose
         "MAT_Steel_Cast": get_or_create_material(
-            "MAT_Steel_Cast", (0.22, 0.24, 0.25, 1.0), metallic=0.85, roughness=0.48
+            "MAT_Steel_Cast", (0.18, 0.20, 0.21, 1.0), metallic=0.88, roughness=0.58
         ),
+        # Gunmetal: dark blued gun steel for main barrel, breech block, recoil shafts
         "MAT_Gunmetal": get_or_create_material(
-            "MAT_Gunmetal", (0.14, 0.15, 0.17, 1.0), metallic=0.92, roughness=0.32
+            "MAT_Gunmetal", (0.12, 0.13, 0.15, 1.0), metallic=0.94, roughness=0.28
         ),
+        # Engine block: industrial cast iron
         "MAT_Engine_Block": get_or_create_material(
-            "MAT_Engine_Block", (0.17, 0.19, 0.20, 1.0), metallic=0.82, roughness=0.45
+            "MAT_Engine_Block", (0.15, 0.17, 0.18, 1.0), metallic=0.82, roughness=0.48
         ),
+        # Engine valve covers: primer red
         "MAT_Engine_Red": get_or_create_material(
-            "MAT_Engine_Red", (0.55, 0.16, 0.14, 1.0), metallic=0.35, roughness=0.42
+            "MAT_Engine_Red", (0.50, 0.14, 0.12, 1.0), metallic=0.30, roughness=0.40
         ),
+        # Radiator cooling fins: warm copper / brass
         "MAT_Copper_Radiator": get_or_create_material(
-            "MAT_Copper_Radiator", (0.72, 0.42, 0.26, 1.0), metallic=0.88, roughness=0.40
+            "MAT_Copper_Radiator", (0.72, 0.42, 0.26, 1.0), metallic=0.90, roughness=0.38
         ),
+        # Rubber: road wheel solid tires
         "MAT_Rubber": get_or_create_material(
-            "MAT_Rubber", (0.10, 0.10, 0.11, 1.0), metallic=0.05, roughness=0.88
+            "MAT_Rubber", (0.08, 0.08, 0.09, 1.0), metallic=0.02, roughness=0.92
         ),
+        # Track steel: manganese track links with friction sheen on guide horns
         "MAT_Track_Steel": get_or_create_material(
-            "MAT_Track_Steel", (0.20, 0.21, 0.23, 1.0), metallic=0.86, roughness=0.58
+            "MAT_Track_Steel", (0.19, 0.20, 0.22, 1.0), metallic=0.88, roughness=0.55
         ),
+        # Brass ammo: polished 92mm brass cartridge cases
         "MAT_Brass_Ammo": get_or_create_material(
-            "MAT_Brass_Ammo", (0.78, 0.63, 0.28, 1.0), metallic=0.94, roughness=0.22
+            "MAT_Brass_Ammo", (0.82, 0.66, 0.26, 1.0), metallic=0.96, roughness=0.18
         ),
+        # Optics: coated optical glass with subtle reflection and transmission
         "MAT_Optics_Glass": get_or_create_material(
-            "MAT_Optics_Glass", (0.10, 0.22, 0.25, 1.0), metallic=0.15, roughness=0.15, transmission=0.7
+            "MAT_Optics_Glass", (0.08, 0.22, 0.24, 1.0), metallic=0.10, roughness=0.12, transmission=0.80
         ),
+        # Crew uniform: late-war khaki-drab canvas uniform
         "MAT_Crew_Uniform": get_or_create_material(
-            "MAT_Crew_Uniform", (0.33, 0.35, 0.27, 1.0), metallic=0.05, roughness=0.82
+            "MAT_Crew_Uniform", (0.30, 0.32, 0.24, 1.0), metallic=0.02, roughness=0.85
         ),
+        # Wood: pioneer tool handles (ash / walnut)
         "MAT_Wood": get_or_create_material(
-            "MAT_Wood", (0.36, 0.23, 0.13, 1.0), metallic=0.02, roughness=0.75
+            "MAT_Wood", (0.34, 0.21, 0.12, 1.0), metallic=0.02, roughness=0.72
         ),
     }
     return materials

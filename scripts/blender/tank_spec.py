@@ -54,6 +54,7 @@ SPEC = {
         {"name": "CMP_Radio", "type": "electrical", "system": "radio", "hp": 90},
         {"name": "CMP_Intercom", "type": "electrical", "system": "radio", "hp": 60},
         {"name": "CMP_BatteryBank", "type": "electrical", "system": "electrical", "hp": 110},
+        {"name": "CMP_TurretBasketFloor", "type": "structural", "system": "turret_basket", "hp": 250},
     ],
     "ammunition_racks": [
         {"name": "AMMO_ReadyRack", "location": "turret_bustle", "capacity": 12, "parent": "Turret"},

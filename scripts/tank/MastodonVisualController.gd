@@ -67,27 +67,35 @@ func set_display_mode(mode: DisplayMode) -> void:
 	
 	match mode:
 		DisplayMode.NORMAL:
-			_apply_visibility(true, false, false, false, true)
+			_apply_visibility(true, false, false, false, true, true)
 			_reset_armor_materials()
 		DisplayMode.XRAY:
-			_apply_visibility(true, true, true, true, false)
+			_apply_visibility(true, true, true, true, false, true)
 			_apply_armor_material(xray_material)
 		DisplayMode.CUTAWAY:
-			_apply_visibility(false, true, true, true, false)
+			_apply_visibility(false, true, true, true, false, true)
 			_reset_armor_materials()
 		DisplayMode.CREW_FOCUS:
-			_apply_visibility(false, false, true, false, false)
+			_apply_visibility(false, false, true, false, false, false)
 		DisplayMode.COMPONENT_FOCUS:
-			_apply_visibility(false, true, false, true, false)
+			_apply_visibility(false, true, false, true, false, true)
 		DisplayMode.ARMOR_FOCUS:
-			_apply_visibility(true, false, false, false, false)
+			_apply_visibility(true, false, false, false, false, false)
 			_color_code_armor()
 
-func _apply_visibility(show_armor: bool, show_cmp: bool, show_crew: bool, show_ammo: bool, show_vis: bool) -> void:
+func _apply_visibility(show_armor: bool, show_cmp: bool, show_crew: bool, show_ammo: bool, show_vis: bool, show_running_gear: bool = false) -> void:
 	for node in nodes_by_category["ARM"]:
 		node.visible = show_armor
 	for node in nodes_by_category["CMP"]:
-		node.visible = show_cmp
+		var is_running_gear = node.name.begins_with("CMP_Wheel_") or \
+			node.name.begins_with("CMP_DriveSprocket_") or \
+			node.name.begins_with("CMP_Idler_") or \
+			node.name.begins_with("CMP_Track_") or \
+			node.name.begins_with("CMP_Suspension_")
+		if is_running_gear:
+			node.visible = show_cmp or show_running_gear
+		else:
+			node.visible = show_cmp
 	for node in nodes_by_category["CREW"]:
 		node.visible = show_crew
 	for node in nodes_by_category["AMMO"]:

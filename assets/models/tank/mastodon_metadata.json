@@ -215,12 +215,6 @@
       "hp": 180
     },
     {
-      "name": "CMP_TurretBasketFloor",
-      "type": "structural",
-      "system": "traverse",
-      "hp": 200
-    },
-    {
       "name": "CMP_MainGunBreech",
       "type": "armament",
       "system": "gun",
@@ -261,6 +255,12 @@
       "type": "electrical",
       "system": "electrical",
       "hp": 110
+    },
+    {
+      "name": "CMP_TurretBasketFloor",
+      "type": "structural",
+      "system": "turret_basket",
+      "hp": 250
     }
   ],
   "ammunition_racks": [

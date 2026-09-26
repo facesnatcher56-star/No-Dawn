@@ -109,7 +109,8 @@ func set_commander_posture(exposed: bool) -> void:
 		
 	if commander_crew:
 		if commander_exposed:
-			commander_crew.position = cmd_initial_pos + Vector3(0, 0.45, 0)
+			commander_crew.visible = true
+			commander_crew.position = cmd_initial_pos + Vector3(0, 1.15, 0)
 		else:
 			commander_crew.position = cmd_initial_pos
 
