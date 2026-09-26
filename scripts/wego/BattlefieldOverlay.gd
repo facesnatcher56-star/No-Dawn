@@ -61,7 +61,10 @@ func _draw() -> void:
 	label_rects.clear()
 	if game == null or not is_instance_valid(game.player): return
 	
-	# 1. Player Vehicle Status (Non-intrusive activity tag during execution only)
+	# 1. Crew Field-of-View Observation Arcs (Restrained tactical wedges)
+	_draw_crew_fov_overlay()
+
+	# 2. Player Vehicle Status (Non-intrusive activity tag during execution only)
 	if game.phase == "EXECUTION":
 		var tank = screen(game.player.position + Vector3.UP * 1.8)
 		var activity = ""
@@ -71,7 +74,7 @@ func _draw() -> void:
 		if not activity.is_empty():
 			_tag(tank + Vector2(0, -32), activity, BLUE)
 			
-	# 2. Contact Track, Ghost Silhouette & Predicted Corridor
+	# 3. Contact Track, Ghost Silhouette & Predicted Corridor
 	var track = game.player_track
 	var confirmed: bool = game.contact_is_visible()
 	var cam = game.camera
@@ -334,6 +337,9 @@ func _draw_debug_overlay() -> void:
 		draw_circle(ai_belief_scr, 5, GREEN)
 		draw_arc(ai_belief_scr, 10, 0, TAU, 16, GREEN, 1.5)
 		_tag(ai_belief_scr + Vector2(0, 15), "AI BELIEF OF PLAYER", GREEN)
+
+	# Developer Observer Debug Visualization (C, G, L, D full simulation rays)
+	_draw_debug_crew_observers()
 		
 	# Debug Info Panel in Top-Right
 	var dbg_lines = [
@@ -358,3 +364,98 @@ func _draw_debug_overlay() -> void:
 		]
 	]
 	_tag(Vector2(size.x - 220, 50), "\n".join(dbg_lines), MAGENTA)
+
+func _draw_crew_fov_overlay() -> void:
+	if game == null or not is_instance_valid(game.player): return
+	if "show_crew_fov_overlay" in game and not game.show_crew_fov_overlay: return
+	var cam = game.camera
+	var tank = game.player
+	var tank_pos = tank.position + Vector3(0, 0.15, 0)
+	if cam != null and cam.is_position_behind(tank_pos): return
+	if not ("observers" in tank) or tank.observers.is_empty(): return
+	
+	var center_scr = screen(tank_pos)
+	
+	# Restrained, bounded observation sectors
+	# Order: Driver (10m) -> Loader (8.5m) -> Gunner (16m) -> Commander (22m, most prominent)
+	var ordered_roles = ["Driver", "Loader", "Gunner", "Commander"]
+	for r_name in ordered_roles:
+		var obs = tank.observers.get(r_name, null)
+		if obs == null or not obs.is_active: continue
+		
+		var max_r = 10.0
+		var fill_color = Color(0.3, 0.6, 0.8, 0.05)
+		var border_color = Color(0.3, 0.6, 0.8, 0.25)
+		
+		match obs.role:
+			0: # COMMANDER - Primary Situational Awareness Sensor
+				max_r = 22.0
+				fill_color = Color(0.15, 0.55, 0.90, 0.12)
+				border_color = Color(0.28, 0.72, 0.98, 0.55)
+			1: # GUNNER
+				max_r = 16.0
+				fill_color = Color(0.92, 0.70, 0.25, 0.08)
+				border_color = Color(0.92, 0.70, 0.25, 0.40)
+			2: # LOADER
+				max_r = 8.5
+				fill_color = Color(0.65, 0.65, 0.65, 0.04)
+				border_color = Color(0.65, 0.65, 0.65, 0.20)
+			3: # DRIVER
+				max_r = 10.0
+				fill_color = Color(0.35, 0.75, 0.55, 0.05)
+				border_color = Color(0.35, 0.75, 0.55, 0.22)
+				
+		var center_azimuth = obs.world_azimuth
+		var half_fov = deg_to_rad(obs.horizontal_fov_deg * 0.5)
+		var steps = 16
+		var arc_pts = PackedVector2Array()
+		var all_pts_valid = true
+		
+		for i in range(steps + 1):
+			var a = center_azimuth - half_fov + (2.0 * half_fov * float(i) / float(steps))
+			var p3d = tank_pos + Vector3(sin(a) * max_r, 0, -cos(a) * max_r)
+			if cam != null and cam.is_position_behind(p3d):
+				all_pts_valid = false
+				break
+			arc_pts.append(screen(p3d))
+			
+		if all_pts_valid and arc_pts.size() >= 3:
+			var poly = PackedVector2Array()
+			poly.append(center_scr)
+			for p in arc_pts: poly.append(p)
+			if _has_valid_poly_area(poly):
+				draw_colored_polygon(poly, fill_color)
+			draw_polyline(arc_pts, border_color, 1.5, true)
+			draw_dashed_line(center_scr, arc_pts[0], Color(border_color, 0.4), 1.0, 4.0, true)
+			draw_dashed_line(center_scr, arc_pts[arc_pts.size() - 1], Color(border_color, 0.4), 1.0, 4.0, true)
+			var mid_idx = steps / 2
+			draw_line(center_scr, arc_pts[mid_idx], border_color, 1.2, true)
+
+func _draw_debug_crew_observers() -> void:
+	if game == null or not is_instance_valid(game.player) or not ("observers" in game.player): return
+	var cam = game.camera
+	var eye = game.player.position + Vector3(0, 2.75, 0)
+	if cam != null and cam.is_position_behind(eye): return
+	var scr_eye = screen(eye)
+	
+	for r_name in ["Commander", "Gunner", "Loader", "Driver"]:
+		var obs = game.player.observers.get(r_name, null)
+		if obs == null: continue
+		var lbl = r_name[0] # C, G, L, D
+		var a = obs.world_azimuth
+		var ray_len = minf(obs.max_effective_range, 75.0)
+		var p3d_end = eye + Vector3(sin(a) * ray_len, 0, -cos(a) * ray_len)
+		if cam != null and cam.is_position_behind(p3d_end): continue
+		var scr_end = screen(p3d_end)
+		var ray_color = GREEN if obs.is_active else RED
+		draw_line(scr_eye, scr_end, ray_color, 1.5, true)
+		draw_circle(scr_end, 9, Color(0.04, 0.05, 0.07, 0.92))
+		draw_arc(scr_end, 9, 0, TAU, 16, ray_color, 1.5)
+		draw_string(font, scr_end + Vector2(-4, 4), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ray_color)
+		
+		# Show target detection progress if target is tracked
+		if is_instance_valid(game.enemy):
+			var score = obs.detection_progress.get(game.enemy.name, 0.0)
+			if score > 0.0:
+				var stage = obs.get_detection_stage(game.enemy.name)
+				_tag(scr_end + Vector2(0, 16), "%s: %d%% [%s]" % [lbl, int(score * 100), stage], ray_color)

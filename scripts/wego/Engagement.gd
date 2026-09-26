@@ -23,7 +23,7 @@ var world_graphics: WorldPlanningGraphics
 var ghost_tank: A47_Mastodon_Vehicle
 
 # 3D Tactical Perspective Camera
-var cam_target: Vector3 = Vector3(-175, 0, 110)
+var cam_target: Vector3 = Vector3(-750, 0, 110)
 var cam_yaw: float = deg_to_rad(-65.0)
 var cam_pitch: float = deg_to_rad(-22.0)
 var cam_distance: float = 24.0
@@ -31,6 +31,13 @@ var cam_fov: float = 52.0
 var cam_shake: float = 0.0
 var is_orbiting: bool = false
 var last_mouse_pos: Vector2 = Vector2.ZERO
+
+# Configurable Tactical Spawn Zones
+var minimum_enemy_spawn_distance: float = 800.0
+var preferred_enemy_spawn_distance: float = 1500.0
+var maximum_enemy_spawn_distance: float = 2500.0
+var scenario_spawn_distance: float = 1500.0
+var show_crew_fov_overlay: bool = true
 
 # Collapsible Drawers & HUD Controls
 var left_drawer: Control
@@ -78,6 +85,7 @@ var crew_label: Label
 var report: Label
 var execute_button: Button
 var viewer
+var battlefield_overlay = null
 var fields: Dictionary = {}
 var controls: Array = []
 var display_contact: Dictionary = {}
@@ -143,6 +151,36 @@ var impact_systems: Label
 var impact_continue: Button
 var using_queue = false
 
+func setup_spawn_positions(distance: float = 1500.0, player_base: Vector3 = Vector3(-750, 0, 110), enemy_base: Vector3 = Vector3(750, 0, 110)) -> Dictionary:
+	scenario_spawn_distance = clampf(distance, minimum_enemy_spawn_distance, maximum_enemy_spawn_distance)
+	var half_dist = scenario_spawn_distance * 0.5
+	var p_pos = Vector3(-half_dist, 0.0, player_base.z)
+	var e_pos = Vector3(half_dist, 0.0, enemy_base.z)
+	if is_instance_valid(player):
+		player.position = p_pos
+	if is_instance_valid(enemy):
+		enemy.position = e_pos
+	return validate_spawn_placement(p_pos, e_pos)
+
+func validate_spawn_placement(p_pos: Vector3, e_pos: Vector3) -> Dictionary:
+	var separation = p_pos.distance_to(e_pos)
+	var result = {
+		"valid": separation >= minimum_enemy_spawn_distance,
+		"separation": separation,
+		"traversable": true,
+		"no_collision": true,
+		"has_los": false
+	}
+	var space = get_world_3d().direct_space_state if get_world_3d() != null else null
+	if space != null:
+		var p_query = PhysicsRayQueryParameters3D.create(p_pos + Vector3(0, 5, 0), p_pos - Vector3(0, 5, 0), 1)
+		var p_hit = space.intersect_ray(p_query)
+		result["traversable"] = not p_hit.is_empty()
+		var los_query = PhysicsRayQueryParameters3D.create(p_pos + Vector3(0, 2.75, 0), e_pos + Vector3(0, 1.85, 0), 1)
+		var los_hit = space.intersect_ray(los_query)
+		result["has_los"] = los_hit.is_empty()
+	return result
+
 func _ready() -> void:
 	rng.seed = 94217
 	timeline = WegoTimeline.new()
@@ -151,7 +189,6 @@ func _ready() -> void:
 	sensor_model = SensorModel.new(rng)
 	player = Vehicle.new()
 	player.name = "Your tank"
-	player.position = Vector3(-185, 0, 110)
 	player.rotation.y = -PI / 2
 	player.doctrine = CrewDoctrine.new()
 	player.track = player_track
@@ -159,12 +196,13 @@ func _ready() -> void:
 	
 	enemy = Vehicle.new()
 	enemy.name = "Contact A"
-	enemy.position = Vector3(-110, 0, 110)
 	enemy.rotation.y = PI / 2
 	enemy.color = Color("736752")
 	enemy.doctrine = CrewDoctrine.new()
 	enemy.track = enemy_track
 	add_child(enemy)
+
+	setup_spawn_positions(preferred_enemy_spawn_distance)
 	
 	# Initialize 3D World Planning Graphics
 	world_graphics = WorldPlanningGraphics.new()
@@ -383,9 +421,9 @@ func _build_ui() -> void:
 	layer.add_child(root)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var overlay = Overlay.new()
-	overlay.game = self
-	root.add_child(overlay)
+	battlefield_overlay = Overlay.new()
+	battlefield_overlay.game = self
+	root.add_child(battlefield_overlay)
 	var left = _panel(root, 0, 0, 0.19, 1.0)
 	left_drawer = left.get_parent().get_parent()
 	var left_header = HBoxContainer.new()
@@ -457,7 +495,7 @@ func _build_ui() -> void:
 	_spin(advanced, "Travel / m", "move", -15, 35, 0)
 	_spin(advanced, "Hull pivot / °", "pivot", -180, 180, 0)
 	_spin(advanced, "Bearing / °", "bearing", 0, 359, 90)
-	_spin(advanced, "Range / m", "range", 10, 500, 75)
+	_spin(advanced, "Range / m", "range", 10, 3500, 1500)
 	_spin(advanced, "Aim height / m", "height", 0.4, 3.2, 1.4, 0.1)
 	_check(advanced, "Queue one shot", "fire")
 	_check(advanced, "Engine running", "engine", true)
@@ -1283,7 +1321,7 @@ func _update_turn_report() -> void:
 		turn_shot_buttons.add_child(button)
 
 func _dispersion(tank) -> float:
-	var base_cone = 0.0012
+	var base_cone = 0.00025
 	var stab_ok = ("stabilizer_damaged" not in tank or not tank.stabilizer_damaged) and tank.model.functional("Turret drive")
 	var stab = tank.config.gun_stabilization if ("config" in tank and tank.config != null and stab_ok) else "NONE"
 	match stab:
@@ -1320,13 +1358,18 @@ func _fire(tank) -> void:
 		var aim: Vector3
 		if tank.orders.has("aim_point"):
 			aim = tank.orders.aim_point
+			if aim.y < 0.8: aim.y = 1.6
 			range_m = Vector2(aim.x - origin.x, aim.z - origin.z).length()
 		else:
 			var bearing = deg_to_rad(tank.orders.get("bearing", 90.0))
-			range_m = tank.orders.get("range", 75.0)
-			aim = tank.position + Vector3(sin(bearing) * range_m, tank.orders.get("height", 1.4), -cos(bearing) * range_m)
+			range_m = tank.orders.get("range", 1500.0)
+			aim = tank.position + Vector3(sin(bearing) * range_m, tank.orders.get("height", 1.6), -cos(bearing) * range_m)
+		
 		var time = range_m / maxf(100.0, muzzle_speed)
-		aim.y += 4.905 * time * time
+		var t_flight = time
+		if ammo != null and ammo.category == AmmunitionData.Category.KINETIC and ammo.drag_coeff > 0.0:
+			t_flight = (exp(ammo.drag_coeff * range_m) - 1.0) / (ammo.drag_coeff * maxf(100.0, muzzle_speed))
+		aim.y = origin.y + (aim.y - origin.y) * (time / t_flight) + 4.905 * t_flight * lerpf(time, t_flight, 0.35)
 		dir = (aim - origin).normalized()
 		var cone = _dispersion(tank)
 		var right = dir.cross(Vector3.UP).normalized()
@@ -1437,7 +1480,7 @@ func _step_shells(delta: float) -> void:
 		if not remove:
 			for event in shot_events:
 				if event.id == shell.id: event.to = finish
-		if shell.distance > 700:
+		if shell.distance > 3500.0:
 			_set_shot_result(shell.id, finish, "MISS • OUT OF RANGE", "No hit", false)
 			_event("Shot #%02d: %s missed; shell left the engagement." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
 			remove = true
@@ -1601,6 +1644,10 @@ func _process(delta: float) -> void:
 	var phase_str = "REPLAY" if not playback.active.is_empty() else ("SIMULTANEOUS EXEC" if phase == "EXECUTION" and not playback.paused else "PLANNING")
 	status_label.text = "PULSE #%02d • %s\nMODE: %s\n%s • %d rnds" % [turn, phase_str, pulse_name, player.model.status(), player.model.rounds]
 	crew_label.text = player.station_report()
+	if player.has_method("get_observer_status_lines"):
+		var obs_lines = player.get_observer_status_lines()
+		if not obs_lines.is_empty():
+			crew_label.text += "\n\nTACTICAL OBSERVERS\n" + "\n".join(obs_lines)
 
 	if tank_card_label != null:
 		tank_card_label.text = "A-47 MASTODON • %s\nAMMO: %d/%d • SPEED: %.1fm/s\n%s" % [
@@ -1699,6 +1746,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if player_track != null:
 				cam_target = player_track.estimated_position
 				_event("Camera: Focused on contact estimate.")
+		elif event.keycode == KEY_O:
+			show_crew_fov_overlay = not show_crew_fov_overlay
+			_event("Crew FOV Overlay: %s" % ("ENABLED" if show_crew_fov_overlay else "DISABLED"))
 		elif event.keycode == KEY_TAB:
 			if left_drawer: left_drawer.visible = not left_drawer.visible
 			if right_drawer: right_drawer.visible = not right_drawer.visible

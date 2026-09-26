@@ -29,11 +29,13 @@ func new_game():
 	return scene
 
 func commit_duel(scene) -> void:
+	scene.fields.bearing.value = 90.0
+	scene.fields.range.value = scene.player.position.distance_to(scene.enemy.position)
 	scene.fields.fire.button_pressed = true
 	scene._execute()
 	# Both tanks commit a shot at a known test bearing before either executes.
 	scene.enemy.orders.bearing = 270.0
-	scene.enemy.orders.range = 75.0
+	scene.enemy.orders.range = scene.player.position.distance_to(scene.enemy.position)
 	scene.enemy.orders.height = 1.4
 	scene.enemy.shot_pending = true
 
@@ -64,7 +66,7 @@ func run() -> void:
 	check(not game.shot_events.is_empty() and game.shot_events.any(func(s): return s.shooter == game.player.name), "Player shot is recorded in flight")
 	check(game.playback.rate() <= 0.08, "Live shot flight slows the actual battlefield")
 	await capture("shot_flight")
-	for i in range(400):
+	for i in range(800):
 		await physics_frame
 		game._physics_process(0.05)
 		if not game.playback.active.is_empty(): break

@@ -91,27 +91,35 @@ func _build_ground() -> void:
 	var sb = StaticBody3D.new()
 	add_child(sb)
 
-	# Main terrain ground 500x500
+	# Main terrain ground 3600x3600 (Supports 800m - 2500m long-range tactical engagements)
 	var col = CollisionShape3D.new()
 	var box = BoxShape3D.new()
-	box.size = Vector3(540.0, 2.0, 540.0)
+	box.size = Vector3(3600.0, 2.0, 3600.0)
 	col.shape = box
 	col.position = Vector3(0, -1.0, 0)
 	sb.add_child(col)
 
 	var mesh_inst = MeshInstance3D.new()
 	var bmesh = BoxMesh.new()
-	bmesh.size = Vector3(540.0, 2.0, 540.0)
+	bmesh.size = Vector3(3600.0, 2.0, 3600.0)
 	bmesh.material = mat_ground
 	mesh_inst.mesh = bmesh
 	mesh_inst.position = Vector3(0, -1.0, 0)
 	sb.add_child(mesh_inst)
 
-	# Perimeter boundary walls
+	# Outer battlefield perimeter boundaries at 1800m
+	_create_wall(Vector3(0, 6, -1800), Vector3(3600, 12, 6), mat_concrete)
+	_create_wall(Vector3(0, 6, 1800), Vector3(3600, 12, 6), mat_concrete)
+	_create_wall(Vector3(-1800, 6, 0), Vector3(6, 12, 3600), mat_concrete)
+	_create_wall(Vector3(1800, 6, 0), Vector3(6, 12, 3600), mat_concrete)
+
+	# Inner industrial facility walls with open eastern/western railway & road gates
 	_create_wall(Vector3(0, 4, -260), Vector3(540, 8, 4), mat_concrete)
 	_create_wall(Vector3(0, 4, 260), Vector3(540, 8, 4), mat_concrete)
-	_create_wall(Vector3(-260, 4, 0), Vector3(4, 8, 540), mat_concrete)
-	_create_wall(Vector3(260, 4, 0), Vector3(4, 8, 540), mat_concrete)
+	_create_wall(Vector3(-260, 4, -145), Vector3(4, 8, 230), mat_concrete)
+	_create_wall(Vector3(-260, 4, 205), Vector3(4, 8, 110), mat_concrete)
+	_create_wall(Vector3(260, 4, -145), Vector3(4, 8, 230), mat_concrete)
+	_create_wall(Vector3(260, 4, 205), Vector3(4, 8, 110), mat_concrete)
 
 func _create_wall(pos: Vector3, size: Vector3, mat: Material) -> StaticBody3D:
 	var sb = StaticBody3D.new()

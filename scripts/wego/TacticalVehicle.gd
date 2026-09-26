@@ -36,9 +36,27 @@ var track = null
 var doctrine_fire_authorized: bool = false
 var doctrine_halt: bool = false
 var doctrine_reversing: bool = false
+const CrewObserver = preload("res://scripts/wego/CrewObserver.gd")
+
+var observers: Dictionary = {}
+var obs_commander: CrewObserver
+var obs_gunner: CrewObserver
+var obs_loader: CrewObserver
+var obs_driver: CrewObserver
+var commander_independent_bearing: Variant = null
+var designated_target_pos: Variant = null
 
 func _init() -> void:
 	doctrine = CrewDoctrine.new()
+	obs_commander = CrewObserver.new(CrewObserver.Role.COMMANDER, "Commander")
+	obs_gunner = CrewObserver.new(CrewObserver.Role.GUNNER, "Gunner")
+	obs_loader = CrewObserver.new(CrewObserver.Role.LOADER, "Loader")
+	obs_driver = CrewObserver.new(CrewObserver.Role.DRIVER, "Driver")
+	observers["Commander"] = obs_commander
+	observers["Gunner"] = obs_gunner
+	observers["Loader"] = obs_loader
+	observers["Driver"] = obs_driver
+
 var crew_skill: Dictionary = {
 	"commander_spotting": 1.0,
 	"gunner_tracking": 1.0,
@@ -232,7 +250,7 @@ func step(delta: float) -> void:
 			var offset: Vector3 = orders.destination - position
 			offset.y = 0
 			var destination_yaw = -atan2(offset.x, -offset.z)
-			pivot = clampf(angle_difference(rotation.y, destination_yaw), -delta * 0.6, delta * 0.6)
+			pivot = clampf(angle_difference(rotation.y, destination_yaw), -delta * 1.2, delta * 1.2)
 			movement = minf(offset.length(), delta * (2 if orders.get("creep", false) else 7))
 			if absf(angle_difference(rotation.y, destination_yaw)) > 0.04 or offset.length() < 0.1: movement = 0
 		rotation.y += pivot
@@ -278,6 +296,34 @@ func step(delta: float) -> void:
 			visual_tank.elevate_gun(clampf(pitch, deg_to_rad(-8.0), deg_to_rad(20.0)))
 		visual_tank.anim.update(delta)
 
+	# Synchronize crew observer optical orientations & status
+	var ind_bearing = null
+	if config != null and config.commander_independent_sight:
+		if orders.has("commander_bearing"):
+			ind_bearing = deg_to_rad(orders.commander_bearing)
+		elif commander_independent_bearing != null:
+			ind_bearing = commander_independent_bearing
+	var hull_azimuth = -rotation.y
+	var turret_azimuth = -model.turret_yaw
+	obs_commander.update_orientation(hull_azimuth, turret_azimuth, ind_bearing)
+	obs_gunner.update_orientation(hull_azimuth, turret_azimuth)
+	obs_loader.update_orientation(hull_azimuth, turret_azimuth)
+	obs_driver.update_orientation(hull_azimuth, 0.0)
+
+	for o in observers.values():
+		o.can_observe(self)
+
+	# Check Target Designation / Commander-Gunner handoff
+	if designated_target_pos != null and obs_gunner.is_active:
+		var target_offset: Vector3 = designated_target_pos - position
+		var target_bearing = atan2(target_offset.x, -target_offset.z)
+		var angle_diff = absf(angle_difference(obs_gunner.world_azimuth, target_bearing))
+		var half_fov = deg_to_rad(obs_gunner.horizontal_fov_deg * 0.5)
+		if angle_diff <= half_fov:
+			# Gunner has successfully laid gun and acquired designated target!
+			obs_gunner.current_task = "TRACKING"
+			clear_designation()
+
 func gun_goal_yaw() -> float:
 	if orders.has("aim_point"):
 		var offset: Vector3 = orders.aim_point - position
@@ -285,7 +331,36 @@ func gun_goal_yaw() -> float:
 	elif orders.get("tracking_contact", false) and track != null:
 		var offset: Vector3 = track.estimated_position - position
 		return -atan2(offset.x, -offset.z)
+	elif designated_target_pos != null:
+		var offset: Vector3 = designated_target_pos - position
+		return -atan2(offset.x, -offset.z)
 	return deg_to_rad(-orders.get("bearing", 0.0))
+
+func designate_target(target_pos: Vector3) -> void:
+	designated_target_pos = target_pos
+	if obs_commander != null:
+		obs_commander.current_task = "DESIGNATING"
+
+func clear_designation() -> void:
+	designated_target_pos = null
+	if obs_commander != null and obs_commander.is_active:
+		obs_commander.current_task = "SCANNING"
+
+func set_gunner_zoom(magnified: bool) -> void:
+	if obs_gunner != null:
+		obs_gunner.set_zoom(magnified)
+
+func set_commander_zoom(magnified: bool) -> void:
+	if obs_commander != null:
+		obs_commander.set_zoom(magnified)
+
+func get_observer_status_lines() -> Array[String]:
+	var lines: Array[String] = []
+	if obs_commander != null: lines.append(obs_commander.get_status_text())
+	if obs_gunner != null: lines.append(obs_gunner.get_status_text())
+	if obs_driver != null: lines.append(obs_driver.get_status_text())
+	if obs_loader != null: lines.append(obs_loader.get_status_text())
+	return lines
 
 func ready_to_shoot() -> bool:
 	var target_yaw = gun_goal_yaw()

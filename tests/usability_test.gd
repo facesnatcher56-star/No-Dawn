@@ -25,6 +25,13 @@ func run() -> void:
 	await process_frame
 	# process_frame is emitted before node processing; initialize camera/UI
 	# explicitly so headless mode exercises the same projected clicks.
+	game.minimum_enemy_spawn_distance = 50.0
+	game.setup_spawn_positions(75.0, Vector3(-75, 0, 0), Vector3(0, 0, -75))
+	game.player.position = Vector3(-75, 0, 0)
+	game.enemy.position = Vector3(0, 0, -75)
+	game.player.doctrine.on_contact = CrewDoctrine.ContactReaction.CONTINUE_AND_TRACK
+	game._update_camera(0.0)
+	game._publish_contact()
 	game._process(0.0)
 	await capture("planning")
 	check(game.help_box.visible and game.movement_button.visible and game.fire_button.visible, "Basic actions and help are visible on first launch")
