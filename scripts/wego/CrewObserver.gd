@@ -55,6 +55,7 @@ enum SectorWidth {
 }
 
 var sector_width: int = SectorWidth.NORMAL
+var is_sector_assigned: bool = false
 
 func _init(p_role: int = Role.COMMANDER, p_role_name: String = "Commander") -> void:
 	role = p_role
@@ -64,6 +65,7 @@ func _init(p_role: int = Role.COMMANDER, p_role_name: String = "Commander") -> v
 func set_observe_sector(bearing_rad: float, width_deg: float = 45.0) -> void:
 	world_azimuth = bearing_rad
 	sector_width = int(width_deg)
+	is_sector_assigned = true
 	current_task = "OBSERVING"
 	if width_deg <= 22.0:
 		set_zoom(true)

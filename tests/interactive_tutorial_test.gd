@@ -119,6 +119,19 @@ func run_tutorial_tests() -> void:
 	check(not tut.is_active, "Skip button deactivates tutorial")
 	check(tut.reopen_button.visible == true, "Reopen button available after skipping")
 
+	print("\n--- Test 10: Verify Tutorial Never Auto-Skips On Timer or Completion ---")
+	tut._on_reopen_pressed()
+	check(tut.current_step == 0, "Tutorial reopened at Step 0")
+	main_scene.cam_yaw += 0.5
+	tut._process(0.016)
+	check(tut.objective_achieved, "Step 0 objective achieved")
+	# Simulate 10 seconds of idle time
+	for i in range(600):
+		tut._process(0.016)
+	check(tut.current_step == 0, "Tutorial remained on Step 0 after 10s of idling without auto-skipping")
+	tut._on_next_pressed()
+	check(tut.current_step == 1, "Only advances when user explicitly presses next")
+
 	print("\n==================================================")
 	print("Tutorial Test Suite Completed! Failures: ", failures)
 	print("==================================================")

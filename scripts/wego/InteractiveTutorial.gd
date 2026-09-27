@@ -11,7 +11,6 @@ var current_step: int = 0
 var is_active: bool = true
 var is_minimized: bool = false
 var objective_achieved: bool = false
-var auto_advance_timer: float = 0.0
 var step_elapsed: float = 0.0
 
 # Camera baseline tracking for Step 0
@@ -321,12 +320,8 @@ func _process(delta: float) -> void:
 	_update_indicator_target()
 	indicator_canvas.queue_redraw()
 
-func _evaluate_step_objective(delta: float) -> void:
+func _evaluate_step_objective(_delta: float) -> void:
 	if objective_achieved:
-		auto_advance_timer -= delta
-		if auto_advance_timer <= 0.0:
-			# Advance automatically on completion
-			_on_next_pressed()
 		return
 
 	if game == null: return
@@ -338,7 +333,7 @@ func _evaluate_step_objective(delta: float) -> void:
 			var yaw_diff = abs(game.cam_yaw - baseline_cam_yaw)
 			var pitch_diff = abs(game.cam_pitch - baseline_cam_pitch)
 			var dist_diff = abs(game.cam_distance - baseline_cam_dist)
-			if yaw_diff > 0.15 or pitch_diff > 0.15 or dist_diff > 5.0 or step_elapsed > 6.0:
+			if yaw_diff > 0.15 or pitch_diff > 0.15 or dist_diff > 5.0:
 				completed = true
 
 		"move":
@@ -354,7 +349,7 @@ func _evaluate_step_objective(delta: float) -> void:
 				completed = true
 			elif game.player != null and game.player.observers.has("Commander"):
 				var cmd = game.player.observers["Commander"]
-				if cmd.is_sector_assigned:
+				if cmd.get("is_sector_assigned") == true or cmd.current_task in ["OBSERVING", "TRACKING"]:
 					completed = true
 
 		"execute":
@@ -363,8 +358,6 @@ func _evaluate_step_objective(delta: float) -> void:
 
 		"contact":
 			if game.player_track != null and game.player_track.has_contact():
-				completed = true
-			elif game.phase == "PLANNING" and step_elapsed > 4.0:
 				completed = true
 
 		"gunner_sight":
@@ -397,12 +390,17 @@ func _queue_has_kind(queue, kind: String) -> bool:
 func _mark_objective_complete() -> void:
 	if objective_achieved: return
 	objective_achieved = true
-	auto_advance_timer = 2.0
 	objective_icon_label.text = "[ ✔ ]"
 	objective_icon_label.add_theme_color_override("font_color", Color("77dd77"))
 	objective_text_label.add_theme_color_override("font_color", Color("77dd77"))
-	objective_text_label.text = "Objective Complete! [Press Enter or click Next]"
+	objective_text_label.text = "Objective Complete! [Click NEXT or press Enter]"
 	next_button.add_theme_color_override("font_color", Color("77dd77"))
+	var glow_style = StyleBoxFlat.new()
+	glow_style.bg_color = Color(0.16, 0.44, 0.32, 0.95)
+	glow_style.border_color = Color(0.4, 0.95, 0.65, 0.95)
+	glow_style.set_border_width_all(2)
+	glow_style.set_corner_radius_all(4)
+	next_button.add_theme_stylebox_override("normal", glow_style)
 
 func _update_indicator_target() -> void:
 	target_has_position = false
@@ -471,6 +469,10 @@ func _update_step_ui() -> void:
 	objective_icon_label.add_theme_color_override("font_color", Color("ffd166"))
 	objective_text_label.add_theme_color_override("font_color", Color("ffd166"))
 	next_button.add_theme_color_override("font_color", Color.WHITE)
+	var default_style = StyleBoxFlat.new()
+	default_style.bg_color = Color("285e55")
+	default_style.set_corner_radius_all(4)
+	next_button.add_theme_stylebox_override("normal", default_style)
 
 	prev_button.visible = current_step > 0
 	if current_step == steps.size() - 1:
@@ -501,6 +503,16 @@ func _on_skip_pressed() -> void:
 		game._event("Interactive tutorial minimized. Click [? TUTORIAL] in top right to reopen.")
 
 func _on_reopen_pressed() -> void:
+	is_active = true
+	main_panel.visible = true
+	reopen_button.visible = false
+	if current_step >= steps.size() - 1:
+		current_step = 0
+	_record_cam_baseline()
+	_update_step_ui()
+
+func restart_tutorial() -> void:
+	current_step = 0
 	is_active = true
 	main_panel.visible = true
 	reopen_button.visible = false
