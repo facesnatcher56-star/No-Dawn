@@ -20,6 +20,7 @@ const AmmunitionData = preload("res://scripts/wego/AmmunitionData.gd")
 const VehicleConfig = preload("res://scripts/wego/VehicleConfig.gd")
 const GunnerReticleOverlay = preload("res://scripts/wego/GunnerReticleOverlay.gd")
 const GunnerSightSystem = preload("res://scripts/wego/GunnerSightSystem.gd")
+const InteractiveTutorialClass = preload("res://scripts/wego/InteractiveTutorial.gd")
 
 var view_mode: String = "TACTICAL"
 var gunner_overlay: GunnerReticleOverlay
@@ -65,6 +66,7 @@ var drawer_shots_btn: Button
 var contextual_box: Control
 var contextual_buttons: Array[Button] = []
 var mode_state_label: Label
+var tutorial = null
 
 var player
 var enemy
@@ -249,6 +251,10 @@ func _ready() -> void:
 	_update_camera(0.0)
 	_build_ui()
 	_set_map_running(false)
+	
+	# Initialize Interactive Tutorial
+	tutorial = InteractiveTutorialClass.new(self)
+	add_child(tutorial)
 	
 	# Fresh engagement: zero contacts at spawn until detected by sensor model or active scan
 	player_track.last_observation_time = -1.0
@@ -706,6 +712,10 @@ func _build_ui() -> void:
 	turn_report = _label(shot_box, "Ready for orders.", 12)
 	_label(help_box, "TACTICAL GUIDE", 15)
 	_label(help_box, "• LEFT-CLICK: Click ground to queue move.\n• RIGHT-CLICK: Cancel / undo last queued order.\n• RIGHT-DRAG: Orbit view (tactical to top-down).\n• MOUSE WHEEL: Zoom tactical / satellite overview.\n• WASD: Pan battlefield • F: Focus on Mastodon.\n• EXECUTE: Simultaneous WEGO pulse execution.", 12)
+	_button(help_box, "START INTERACTIVE TUTORIAL", func():
+		if tutorial != null:
+			tutorial._on_reopen_pressed()
+	, 28)
 
 	# 1. Top Center: State Machine & Time
 	var hint_box = _hud_bar(tactical_ui, 0.32, 0.01, 0.68, 0.08)
