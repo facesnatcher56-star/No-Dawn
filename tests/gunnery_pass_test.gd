@@ -36,6 +36,10 @@ func run_all_tests() -> void:
 	test_10_observed_splash_range_correction()
 	test_11_bore_lag_horizontal_direction()
 	await test_12_no_arcade_aim_and_fire_mode()
+	test_13_camera_locked_to_physical_bore_no_frozen_scouting()
+	test_14_observe_sector_narrow_vs_broad_efficiency()
+	test_15_track_contact_refinement()
+	test_16_crew_callouts_and_range_drum_controls()
 
 	print("==================================================")
 	print("Gunnery Pass checks completed. Total Failures: ", failures)
@@ -328,3 +332,77 @@ func test_12_no_arcade_aim_and_fire_mode() -> void:
 	check(scene.action_queue.actions[0].kind == "move", "Map click creates tactical MOVE action, not arcade fire")
 	scene.queue_free()
 	await process_frame
+
+func test_13_camera_locked_to_physical_bore_no_frozen_scouting() -> void:
+	print("\n--- Test 13: Camera Locked to Physical Bore (No Frozen-Time Search) ---")
+	var tank = TacticalVehicle.new()
+	root.add_child(tank)
+	tank.rotation.y = 0.0
+	tank.model.turret_yaw = 0.0
+	tank.gunner_sight.current_bore_yaw = 0.0
+	tank.gunner_sight.commanded_yaw = 0.0
+	tank.gunner_sight._update_camera_transform()
+	
+	# Initial camera forward vector is pointing straight along -Z (yaw 0)
+	var initial_fwd = -tank.gunner_sight.sight_camera.global_transform.basis.z
+	check(initial_fwd.dot(Vector3(0, 0, -1)) > 0.98, "Initial sight camera is oriented along physical turret forward")
+	
+	# Player attempts to mouse look / swing sight 45° to the right during paused planning
+	tank.gunner_sight.commanded_yaw = deg_to_rad(-45.0)
+	tank.gunner_sight._update_camera_transform()
+	
+	# The camera forward vector MUST NOT HAVE MOVED! It remains locked to the physical turret bore!
+	var planned_fwd = -tank.gunner_sight.sight_camera.global_transform.basis.z
+	check(planned_fwd.dot(Vector3(0, 0, -1)) > 0.98, "Sight camera strictly remains pointed along physical bore during planning (cannot cheat scan)")
+	check(absf(angle_difference(tank.gunner_sight.commanded_yaw, tank.gunner_sight.current_bore_yaw)) > 0.7, "Commanded lay is offset while physical turret remains stationary")
+	
+	# Now simulate physical execution: turret traverses at 24°/s
+	tank.gunner_sight.update_step(1.0)
+	var traversing_fwd = -tank.gunner_sight.sight_camera.global_transform.basis.z
+	check(traversing_fwd.x > 0.2, "During execution, camera traverses in real-time with physical turret (Actual X: %.2f)" % traversing_fwd.x)
+	tank.queue_free()
+
+func test_14_observe_sector_narrow_vs_broad_efficiency() -> void:
+	print("\n--- Test 14: Observe Sector Narrow vs Broad Efficiency ---")
+	var obs = tank_observer_for_test()
+	
+	# Set to Narrow Sector (18°)
+	obs.set_observe_sector(0.0, 18.0)
+	check(obs.horizontal_fov_deg == 18.0, "Narrow sector FOV is 18°")
+	check(obs.sector_width == 18, "Sector width record is 18")
+	check(obs.is_magnified, "Narrow sector enables magnified optics")
+	
+	# Set to Broad Sector (90°)
+	obs.set_observe_sector(0.0, 90.0)
+	check(obs.horizontal_fov_deg == 90.0, "Broad sector FOV expands to 90°")
+	check(not obs.is_magnified, "Broad sector uses wide unmagnified optics")
+
+func test_15_track_contact_refinement() -> void:
+	print("\n--- Test 15: Track Contact Command Focuses Commander ---")
+	var obs = tank_observer_for_test()
+	obs.track_contact_target(deg_to_rad(74.0), "CONTACT_A")
+	check(obs.current_task == "TRACKING", "Commander task set to TRACKING")
+	check(obs.target_contact_id == "CONTACT_A", "Commander tracking target set to CONTACT_A")
+	check(obs.horizontal_fov_deg == 18.0, "Tracking focuses optic to narrow 18° cone")
+
+func test_16_crew_callouts_and_range_drum_controls() -> void:
+	print("\n--- Test 16: Crew Callouts and Range Drum Controls ---")
+	var tank = TacticalVehicle.new()
+	var initial_range = tank.gunner_sight.sight_range_m # 800m
+	
+	# Coarse range adjustment (+100m)
+	tank.gunner_sight.adjust_sight_range(100.0)
+	check(tank.gunner_sight.sight_range_m == initial_range + 100.0, "Coarse adjustment shifts range drum by 100m (New: %.0fm)" % tank.gunner_sight.sight_range_m)
+	
+	# Fine range adjustment (-25m)
+	tank.gunner_sight.adjust_sight_range(-25.0)
+	check(tank.gunner_sight.sight_range_m == initial_range + 75.0, "Fine adjustment shifts range drum by 25m (New: %.0fm)" % tank.gunner_sight.sight_range_m)
+	
+	# Verify signals exist for crew callouts
+	check(tank.gunner_sight.has_signal("target_acquired"), "GunnerSightSystem has target_acquired signal")
+	check(tank.gunner_sight.has_signal("gun_settled"), "GunnerSightSystem has gun_settled signal")
+	check(tank.gunner_sight.has_signal("turret_traversing"), "GunnerSightSystem has turret_traversing signal")
+
+func tank_observer_for_test():
+	var CrewObserver = preload("res://scripts/wego/CrewObserver.gd")
+	return CrewObserver.new(CrewObserver.Role.COMMANDER, "Commander")

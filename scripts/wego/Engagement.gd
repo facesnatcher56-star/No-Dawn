@@ -113,6 +113,10 @@ var fire_button: Button
 var scan_button: Button
 var contact_fire_button: Button
 var cancel_button: Button
+var observe_button: Button
+var sector_width_choice: OptionButton
+var track_contact_button: Button
+var previous_reload_time: float = 0.0
 var execution_progress: ProgressBar
 var detail_tabs: TabBar
 var help_box: VBoxContainer
@@ -252,6 +256,15 @@ func _ready() -> void:
 	contact_visual_position = Vector3.ZERO
 	contact_visual_radius = 0.0
 	_publish_contact()
+
+	if player != null and player.gunner_sight != null:
+		player.gunner_sight.target_acquired.connect(func():
+			_callout("Gunner", "TARGET!"))
+		player.gunner_sight.gun_settled.connect(func():
+			_callout("Gunner", "On!"))
+		player.gunner_sight.turret_traversing.connect(func():
+			_callout("Gunner", "Traversing..."))
+
 	_log("Systems operational. Tactical WEGO initialized.")
 
 func _apply_ghost_material(tank: A47_Mastodon_Vehicle) -> void:
@@ -298,6 +311,8 @@ func _callout(speaker: String, text_val: String) -> void:
 		radio_callout_label.text = "[RADIO] %s: \"%s\"" % [speaker.to_upper(), text_val]
 		radio_callout_timer = 3.5
 		radio_callout_label.visible = true
+	if gunner_overlay != null:
+		gunner_overlay.trigger_callout(speaker, text_val)
 	_log("%s: %s" % [speaker, text_val])
 
 func _set_map_running(enabled: bool) -> void:
@@ -479,19 +494,41 @@ func _build_ui() -> void:
 	aim_button.toggle_mode = true
 	aim_button.tooltip_text = "Traverse turret toward tactical direction."
 	
-	# Retain fire_button reference for backwards compatibility
-	fire_button = Button.new()
+	# Reconnaissance & Observation (Deliberate Commander Recon)
+	_label(left, "RECONNAISSANCE & OBSERVATION", 11)
+	var recon_row = HBoxContainer.new()
+	left.add_child(recon_row)
+	observe_button = _button(recon_row, "OBSERVE SECTOR", _start_observe_sector_mode, 28)
+	observe_button.toggle_mode = true
+	observe_button.tooltip_text = "Click to set Commander's observation sector on the battlefield."
+	sector_width_choice = OptionButton.new()
+	sector_width_choice.add_item("NORM 45°", 45)
+	sector_width_choice.add_item("NARR 18°", 18)
+	sector_width_choice.add_item("BROAD 90°", 90)
+	sector_width_choice.custom_minimum_size = Vector2(85, 26)
+	sector_width_choice.item_selected.connect(func(idx):
+		var w = sector_width_choice.get_item_id(idx)
+		var obs_cmd = player.observers.get("Commander", null) if player != null else null
+		if obs_cmd != null:
+			obs_cmd.set_observe_sector(obs_cmd.world_azimuth, float(w))
+			_event("COMMANDER: Observation sector set to %d° width." % w))
+	recon_row.add_child(sector_width_choice)
+	
+	track_contact_button = _button(recon_row, "TRACK", _track_contact_order, 28)
+	track_contact_button.tooltip_text = "Focus Commander observation on suspected contact to refine estimates."
+	
+	# Subsystems & Actions
 	var utility = HBoxContainer.new()
 	left.add_child(utility)
 	reload_button = _button(utility, "RELOAD", func(): _append_action("reload", player.position), 28)
 	wait_button = _button(utility, "WAIT 1s", func(): _append_action("wait", player.position, 1.0), 28)
-	scan_button = _button(left, "SCAN FOR ENEMY", _queue_scan, 30)
-	scan_button.tooltip_text = "Stop and sweep searchlight for 2s."
-	var edits = HBoxContainer.new()
-	left.add_child(edits)
-	stop_button = _button(edits, "STOP / EDIT", _stop_and_edit, 28)
+	cancel_button = _button(utility, "CLEAR", _clear_orders, 28)
+	
+	# Retain backward-compatible references
+	fire_button = Button.new()
+	scan_button = Button.new()
+	stop_button = Button.new()
 	controls.erase(stop_button)
-	cancel_button = _button(edits, "CLEAR ALL", _clear_orders, 28)
 	_label(left, "QUEUE", 13)
 	queue_scroll = ScrollContainer.new()
 	queue_scroll.custom_minimum_size.y = 100
@@ -930,19 +967,45 @@ func _queue_scan() -> void:
 	fields.engine.button_pressed = false
 	fields.observe.button_pressed = true
 	fields.light.button_pressed = true
-	order_notice = "Scan queued: sweep searchlight forward to search for contacts."
-	_append_action("scan", _planned_aim())
-	_log("SCAN appended. The light can reveal your position.")
+func _start_observe_sector_mode() -> void:
+	if not _can_edit_orders(): return
+	_set_mode("observe_sector")
+	order_notice = "Click battlefield to orient Commander observation sector."
+
+func _set_commander_sector_at(point: Vector3) -> void:
+	if not is_instance_valid(player): return
+	var offset = point - player.position
+	var bearing_rad = atan2(offset.x, -offset.z)
+	var obs_commander = player.observers.get("Commander", null)
+	if obs_commander != null:
+		var width_deg = 45.0
+		if sector_width_choice != null:
+			width_deg = float(sector_width_choice.get_selected_id())
+		obs_commander.set_observe_sector(bearing_rad, width_deg)
+		var bearing_deg = fposmod(rad_to_deg(bearing_rad), 360.0)
+		_callout("Commander", "Observing sector %03d° (%d° arc)." % [int(bearing_deg), int(width_deg)])
+		_event("COMMANDER: Observing sector %03d° with %d° arc." % [int(bearing_deg), int(width_deg)])
+
+func _track_contact_order() -> void:
+	if not _can_edit_orders() or display_contact.is_empty(): return
+	var obs_commander = player.observers.get("Commander", null)
+	if obs_commander != null and player_track != null:
+		var bearing_rad = deg_to_rad(player_track.estimated_bearing_deg)
+		obs_commander.track_contact_target(bearing_rad, player_track.contact_id)
+		_callout("Commander", "Tracking Contact A. Refining estimates...")
+		_event("COMMANDER: Focused observation on Contact A.")
 
 func _slew_to_contact_and_aim() -> void:
 	if not _can_edit_orders() or display_contact.is_empty(): return
 	if player != null and player.gunner_sight != null and player_track != null:
 		player.gunner_sight.slew_to_contact(player_track)
-		fields.bearing.value = fposmod(rad_to_deg(atan2(player_track.estimated_position.x - player.position.x, -(player_track.estimated_position.z - player.position.z))), 360.0)
+		fields.bearing.value = fposmod(player_track.estimated_bearing_deg, 360.0)
 		fields.range.value = player_track.estimated_range
+		var est_dir = Vector3(sin(deg_to_rad(player_track.estimated_bearing_deg)), 0, -cos(deg_to_rad(player_track.estimated_bearing_deg)))
+		_append_action("aim", player.position + est_dir * 100.0)
 		_enter_gunner_view()
 		_callout("Commander", "TARGET DESIGNATED! Gunner, slew on bearing %03d°!" % int(player_track.estimated_bearing_deg))
-		_event("COMMANDER: Turret slewing toward contact estimate (%03d°)." % int(player_track.estimated_bearing_deg))
+		_event("COMMANDER: Turret traverse commanded to estimated bearing %03d°." % int(player_track.estimated_bearing_deg))
 
 func _toggle_gunner_view() -> void:
 	if view_mode == "TACTICAL":
@@ -1599,7 +1662,7 @@ func _step_shells(delta: float) -> void:
 				var splash_rel = imp_res.get("impact_observation", "")
 				if splash_rel != null and not splash_rel.is_empty() and splash_rel != "HIT":
 					player_track.apply_observed_impact(splash_rel)
-					_callout("Gunner", "SPLASH %s! Range adjusted." % splash_rel)
+					_callout("Gunner", "%s!" % splash_rel)
 					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
 			remove = true
 		elif finish.y <= 0.0:
@@ -1611,7 +1674,7 @@ func _step_shells(delta: float) -> void:
 				var splash_rel = imp_res.get("impact_observation", "")
 				if splash_rel != null and not splash_rel.is_empty() and splash_rel != "HIT":
 					player_track.apply_observed_impact(splash_rel)
-					_callout("Gunner", "SPLASH %s! Range adjusted." % splash_rel)
+					_callout("Gunner", "%s!" % splash_rel)
 					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
 			remove = true
 		shell.distance += segment
@@ -1728,9 +1791,10 @@ func _refresh_orders() -> void:
 	if using_queue:
 		order_summary.text = "Queue: %d actions" % action_queue.actions.size() if not action_queue.actions.is_empty() else ""
 	movement_button.set_pressed_no_signal(input_mode == "move")
-	fire_button.set_pressed_no_signal(input_mode == "fire")
 	aim_button.set_pressed_no_signal(input_mode == "aim")
 	hull_button.set_pressed_no_signal(input_mode == "hull")
+	observe_button.set_pressed_no_signal(input_mode == "observe_sector")
+	track_contact_button.disabled = display_contact.is_empty()
 	
 	var p_dur = timeline.pulse_duration if timeline else 5.0
 	execution_progress.max_value = p_dur
@@ -1757,6 +1821,9 @@ func _refresh_orders() -> void:
 	elif input_mode in ["aim", "hull"]:
 		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
 		action_hint.text = "Click direction to orient " + ("turret" if input_mode == "aim" else "hull")
+	elif input_mode == "observe_sector":
+		action_hint.add_theme_color_override("font_color", Color(0.45, 0.95, 0.65))
+		action_hint.text = "Click battlefield to orient Commander observation sector"
 	elif input_mode == "fire":
 		action_hint.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35))
 		action_hint.text = "Press [G] to enter Gunner Sight"
@@ -1774,6 +1841,12 @@ func _process(delta: float) -> void:
 	if not is_instance_valid(player): return
 	ui_time += delta
 	_update_camera(delta)
+	
+	# Loader status notification
+	var cur_reload = player.model.reload
+	if previous_reload_time > 0.05 and cur_reload <= 0.05 and player.model.can_fire():
+		_callout("Loader", "Up!")
+	previous_reload_time = cur_reload
 	
 	if radio_callout_timer > 0.0:
 		radio_callout_timer -= delta
@@ -1888,11 +1961,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event is InputEventMouseButton and event.pressed:
 			if is_instance_valid(player) and player.gunner_sight != null:
 				if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-					var step_m = 10.0 if Input.is_key_pressed(KEY_SHIFT) else 50.0
+					var step_m = 25.0 if Input.is_key_pressed(KEY_SHIFT) else 100.0
 					player.gunner_sight.adjust_sight_range(step_m)
 					return
 				elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-					var step_m = 10.0 if Input.is_key_pressed(KEY_SHIFT) else 50.0
+					var step_m = 25.0 if Input.is_key_pressed(KEY_SHIFT) else 100.0
 					player.gunner_sight.adjust_sight_range(-step_m)
 					return
 				elif event.button_index == MOUSE_BUTTON_LEFT:
@@ -1911,6 +1984,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif event.keycode == KEY_P:
 				_toggle_fire_policy()
 				return
+			elif event.keycode == KEY_T:
+				if player_track != null and player_track.has_contact():
+					player.gunner_sight.slew_to_contact(player_track)
+					_callout("Gunner", "Slewing toward Contact A (%03d°)..." % int(player_track.estimated_bearing_deg))
+				return
+			elif event.keycode == KEY_F3:
+				debug_overlay_enabled = not debug_overlay_enabled
+				if gunner_overlay != null:
+					gunner_overlay.debug_mode = debug_overlay_enabled
+				player.set_debug_visuals(debug_overlay_enabled)
+				enemy.set_debug_visuals(debug_overlay_enabled)
+				_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
+				return
 			elif event.keycode == KEY_TAB:
 				_exit_gunner_view()
 				return
@@ -1922,6 +2008,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		elif event.keycode == KEY_F3:
 			debug_overlay_enabled = not debug_overlay_enabled
+			if gunner_overlay != null:
+				gunner_overlay.debug_mode = debug_overlay_enabled
 			player.set_debug_visuals(debug_overlay_enabled)
 			enemy.set_debug_visuals(debug_overlay_enabled)
 			_event("Debug overlay: %s" % ("ENABLED" if debug_overlay_enabled else "DISABLED"))
@@ -1990,11 +2078,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
 				if hit != null:
 					if input_mode == "move": _queue_move(hit)
-					elif input_mode == "fire": _queue_fire(hit)
 					elif input_mode in ["aim", "hull"]:
 						var kind = input_mode
 						if kind == "aim": _aim_at(hit)
 						_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
+						input_mode = "select"
+					elif input_mode == "observe_sector":
+						_set_commander_sector_at(hit)
 						input_mode = "select"
 					else:
 						# Default / nothing selected: auto-assume player is trying to move tank there

@@ -106,7 +106,19 @@ func evaluate(
 				elif obs.role == CrewObserverClass.Role.GUNNER:
 					skill = observer.crew_skill.get("gunner_tracking", 1.0)
 					
-			var rate = base_rate * dist_factor * skill
+			# Sector width efficiency modifier for Commander
+			var sector_mult = 1.0
+			if obs.role == CrewObserverClass.Role.COMMANDER:
+				if obs.horizontal_fov_deg <= 22.0:
+					sector_mult = 1.8 # Narrow sector: concentrated high efficiency
+				elif obs.horizontal_fov_deg <= 50.0:
+					sector_mult = 1.0 # Normal sector
+				else:
+					sector_mult = 0.55 # Broad sector: large area, slower pickup
+				if obs.current_task == "TRACKING":
+					sector_mult *= 1.4 # Dedicated target tracking
+					
+			var rate = base_rate * dist_factor * skill * sector_mult
 			var score = obs.accumulate_detection(target.name, rate, delta_time)
 			
 			if score >= 0.20:
@@ -157,6 +169,18 @@ func evaluate(
 					bearing_err = 3.5
 					range_err_frac = 0.28
 					target_classification_name = "Possible Contact"
+					
+			# Refine precision if observer is in narrow sector or actively tracking
+			if best_observer.role == CrewObserverClass.Role.COMMANDER:
+				if best_observer.current_task == "TRACKING":
+					bearing_err = maxf(0.25, bearing_err * 0.45)
+					range_err_frac = maxf(0.025, range_err_frac * 0.5)
+				elif best_observer.horizontal_fov_deg <= 22.0:
+					bearing_err = maxf(0.3, bearing_err * 0.6)
+					range_err_frac = maxf(0.04, range_err_frac * 0.7)
+				elif best_observer.horizontal_fov_deg > 50.0:
+					bearing_err *= 1.5
+					range_err_frac *= 1.3
 					
 			var obs = ObservationClass.new(
 				sim_time,

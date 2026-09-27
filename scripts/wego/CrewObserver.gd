@@ -48,18 +48,44 @@ var target_contact_id: String = ""
 # Progressive detection progress per target: target_id -> float (0.0 to 1.0+)
 var detection_progress: Dictionary = {}
 
+enum SectorWidth {
+	NARROW = 18,
+	NORMAL = 45,
+	BROAD = 90
+}
+
+var sector_width: int = SectorWidth.NORMAL
+
 func _init(p_role: int = Role.COMMANDER, p_role_name: String = "Commander") -> void:
 	role = p_role
 	role_name = p_role_name
 	_configure_role_defaults()
 
+func set_observe_sector(bearing_rad: float, width_deg: float = 45.0) -> void:
+	world_azimuth = bearing_rad
+	sector_width = int(width_deg)
+	current_task = "OBSERVING"
+	if width_deg <= 22.0:
+		set_zoom(true)
+	else:
+		set_zoom(false)
+	horizontal_fov_deg = width_deg
+
+func track_contact_target(bearing_rad: float, contact_id: String) -> void:
+	world_azimuth = bearing_rad
+	horizontal_fov_deg = 18.0
+	sector_width = 18
+	target_contact_id = contact_id
+	current_task = "TRACKING"
+	set_zoom(true)
+
 func _configure_role_defaults() -> void:
 	match role:
 		Role.COMMANDER:
 			mount_type = MountType.INDEPENDENT
-			wide_fov_deg = 60.0
+			wide_fov_deg = 45.0
 			wide_magnification = 1.0
-			narrow_fov_deg = 16.0
+			narrow_fov_deg = 18.0
 			narrow_magnification = 4.5
 			horizontal_fov_deg = wide_fov_deg
 			vertical_fov_deg = 24.0

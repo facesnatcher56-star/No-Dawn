@@ -31,6 +31,11 @@ enum FirePolicy {
 	FIRE_WHEN_STABLE  # Waits until gun settling has completed before firing
 }
 
+# Signals for authentic crew callouts
+signal target_acquired()
+signal gun_settled()
+signal turret_traversing()
+
 var vehicle = null # TacticalVehicle reference
 var sight_camera: Camera3D
 
@@ -99,14 +104,20 @@ func _update_camera_transform() -> void:
 	var quat = Quaternion.from_euler(Vector3(0.0, turret_rot, 0.0))
 	sight_camera.global_position = vehicle.position + quat * local_optic_offset
 	
-	# Look direction reflects current commanded sight line
-	var look_quat = Quaternion.from_euler(Vector3(commanded_pitch, commanded_yaw, 0.0))
+	# The camera look direction is strictly tied to the ACTUAL current physical gunner optic / turret orientation!
+	# The player cannot freely rotate the camera during frozen planning time.
+	var ammo = vehicle.get_active_ammo() if vehicle != null else null
+	var ballistic_elev = get_ballistic_elevation(sight_range_m, ammo)
+	var optic_pitch = current_bore_pitch - ballistic_elev
+	var look_quat = Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0))
 	var forward = look_quat * Vector3(0, 0, -1)
 	sight_camera.look_at(sight_camera.global_position + forward, Vector3.UP)
 
 func set_active(active: bool) -> void:
 	if sight_camera != null:
 		sight_camera.current = active
+		if active:
+			_update_camera_transform()
 
 func is_active() -> bool:
 	return sight_camera != null and sight_camera.current
@@ -249,7 +260,10 @@ func update_step(delta: float, target_vehicle = null, world_3d: World3D = null) 
 	var pitch_moving = absf(current_bore_pitch - goal_bore_pitch) > 0.01
 	var hull_moving = vehicle.speed > 0.2 or absf(vehicle.yaw_rate) > 0.05
 	
+	var prev_settling = settling_state
 	if yaw_moving or pitch_moving or hull_moving:
+		if settling_state == SettlingState.STABLE and (yaw_moving or pitch_moving):
+			turret_traversing.emit()
 		settling_timer = SETTLING_DURATION
 		settling_state = SettlingState.UNSTABLE
 	else:
@@ -259,7 +273,10 @@ func update_step(delta: float, target_vehicle = null, world_3d: World3D = null) 
 		else:
 			settling_state = SettlingState.STABLE
 			
-	# Update Camera position
+		if prev_settling != SettlingState.STABLE and settling_state == SettlingState.STABLE:
+			gun_settled.emit()
+			
+	# Update Camera position & orientation
 	_update_camera_transform()
 	
 	# Optical Line of Sight & Acquisition Check
@@ -277,12 +294,14 @@ func _update_acquisition(delta: float, target_vehicle, world_3d: World3D) -> voi
 	var dist = offset.length()
 	var to_target_dir = offset.normalized()
 	
-	# Sight forward direction reflects commanded angles
+	# Sight forward direction is the PHYSICAL optic orientation!
 	var sight_forward: Vector3
 	if sight_camera != null and sight_camera.is_inside_tree():
-		sight_forward = sight_camera.global_transform.basis * Vector3(0, 0, -1)
+		sight_forward = -sight_camera.global_transform.basis.z
 	else:
-		var look_quat = Quaternion.from_euler(Vector3(commanded_pitch, commanded_yaw, 0.0))
+		var ammo = vehicle.get_active_ammo() if vehicle != null else null
+		var optic_pitch = current_bore_pitch - get_ballistic_elevation(sight_range_m, ammo)
+		var look_quat = Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0))
 		sight_forward = look_quat * Vector3(0, 0, -1)
 		
 	var angle_to_target = rad_to_deg(sight_forward.angle_to(to_target_dir))
@@ -299,19 +318,24 @@ func _update_acquisition(delta: float, target_vehicle, world_3d: World3D) -> voi
 		target_has_los = true
 		
 	var in_fov = angle_to_target <= (optic_fov_deg * 0.5)
+	var was_acquired = (acquisition_state in [AcquisitionState.TARGET_VISIBLE, AcquisitionState.ACQUIRED, AcquisitionState.TRACKING])
+	var is_slewing = absf(angle_difference(current_bore_yaw, commanded_yaw)) > 0.04
 	
-	if in_fov and target_has_los:
+	if is_slewing:
+		acquisition_state = AcquisitionState.SLEWING
+		visual_contact_duration = maxf(0.0, visual_contact_duration - delta * 2.0)
+	elif in_fov and target_has_los:
 		visual_contact_duration += delta
-		if visual_contact_duration > 0.5:
+		if visual_contact_duration > 0.4:
 			acquisition_state = AcquisitionState.TRACKING if tracking_enabled else AcquisitionState.ACQUIRED
 		else:
 			acquisition_state = AcquisitionState.TARGET_VISIBLE
+			
+		if not was_acquired:
+			target_acquired.emit()
 	else:
 		visual_contact_duration = maxf(0.0, visual_contact_duration - delta * 2.0)
-		if absf(angle_difference(current_bore_yaw, commanded_yaw)) > 0.1:
-			acquisition_state = AcquisitionState.SLEWING
-		else:
-			acquisition_state = AcquisitionState.SEARCHING
+		acquisition_state = AcquisitionState.SEARCHING
 
 # Check if gun is aligned within firing window
 func is_bore_aligned() -> bool:
@@ -322,7 +346,10 @@ func is_bore_aligned() -> bool:
 	return yaw_aligned and pitch_aligned
 
 func can_fire_now() -> bool:
-	if not is_bore_aligned(): return false
-	if fire_policy == FirePolicy.FIRE_WHEN_STABLE and settling_state != SettlingState.STABLE:
-		return false
+	if vehicle != null:
+		if not vehicle.model.can_fire(): return false
+		if vehicle.model.reload > 0.05: return false
+	if fire_policy == FirePolicy.FIRE_WHEN_STABLE:
+		if not is_bore_aligned(): return false
+		if settling_state != SettlingState.STABLE: return false
 	return true
