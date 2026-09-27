@@ -44,6 +44,9 @@ var last_mouse_pos: Vector2 = Vector2.ZERO
 var cam_following_player: bool = true
 var right_click_down_pos: Vector2 = Vector2.ZERO
 var right_click_dragged: bool = false
+var cam_pan_velocity: Vector3 = Vector3.ZERO
+var is_panning_mouse: bool = false
+var last_pan_mouse_pos: Vector2 = Vector2.ZERO
 
 # Configurable Tactical Spawn Zones
 var minimum_enemy_spawn_distance: float = 800.0
@@ -300,11 +303,43 @@ func _apply_ghost_material(tank: A47_Mastodon_Vehicle) -> void:
 func _update_camera(delta: float) -> void:
 	if not is_instance_valid(player) or camera == null: return
 	
-	if cam_following_player:
+	# Continuous smooth keyboard panning
+	var is_keyboard_panning = false
+	var pan_input = Vector2.ZERO
+	if view_mode == "TACTICAL":
+		var vp = get_viewport()
+		var focus_owner = vp.gui_get_focus_owner() if vp else null
+		if not (focus_owner is LineEdit or focus_owner is TextEdit):
+			if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+				pan_input.y += 1.0
+			if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+				pan_input.y -= 1.0
+			if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+				pan_input.x -= 1.0
+			if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+				pan_input.x += 1.0
+			is_keyboard_panning = (pan_input != Vector2.ZERO)
+
+	if is_keyboard_panning:
+		cam_following_player = false
+		pan_input = pan_input.normalized()
+		var cam_forward = Vector3(-sin(cam_yaw), 0, -cos(cam_yaw))
+		var cam_right = Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
+		var move_dir = cam_forward * pan_input.y + cam_right * pan_input.x
+		var target_speed = clampf(cam_distance * 1.5, 25.0, 150.0)
+		cam_pan_velocity = cam_pan_velocity.lerp(move_dir * target_speed, delta * 12.0)
+		cam_target += cam_pan_velocity * delta
+	elif cam_following_player:
+		cam_pan_velocity = Vector3.ZERO
 		if delta > 0.0:
-			cam_target = cam_target.lerp(player.position, delta * 5.0)
+			cam_target = cam_target.lerp(player.position, delta * 6.0)
 		else:
 			cam_target = player.position
+	else:
+		# Inertial glide after releasing panning keys
+		if delta > 0.0 and cam_pan_velocity.length_squared() > 0.001:
+			cam_pan_velocity = cam_pan_velocity.lerp(Vector3.ZERO, delta * 8.0)
+			cam_target += cam_pan_velocity * delta
 
 	var shake_offset = Vector3.ZERO
 	if cam_shake > 0.0:
@@ -2273,23 +2308,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_TAB:
 			if left_drawer: left_drawer.visible = not left_drawer.visible
 			if right_drawer: right_drawer.visible = not right_drawer.visible
-		elif event.keycode in [KEY_W, KEY_S, KEY_A, KEY_D]:
-			var pan_speed = maxf(10.0, cam_distance * 0.18)
+		elif event.keycode in [KEY_W, KEY_S, KEY_A, KEY_D, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT]:
 			cam_following_player = false
-			if event.keycode == KEY_W:
-				cam_target += Vector3(-sin(cam_yaw), 0, -cos(cam_yaw)) * pan_speed
-			elif event.keycode == KEY_S:
-				cam_target += Vector3(sin(cam_yaw), 0, cos(cam_yaw)) * pan_speed
-			elif event.keycode == KEY_A:
-				cam_target += Vector3(-cos(cam_yaw), 0, sin(cam_yaw)) * pan_speed
-			elif event.keycode == KEY_D:
-				cam_target += Vector3(cos(cam_yaw), 0, -sin(cam_yaw)) * pan_speed
+			if not event.is_echo():
+				var cam_forward = Vector3(-sin(cam_yaw), 0, -cos(cam_yaw))
+				var cam_right = Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
+				var dir = Vector3.ZERO
+				if event.keycode in [KEY_W, KEY_UP]: dir += cam_forward
+				elif event.keycode in [KEY_S, KEY_DOWN]: dir -= cam_forward
+				elif event.keycode in [KEY_A, KEY_LEFT]: dir -= cam_right
+				elif event.keycode in [KEY_D, KEY_RIGHT]: dir += cam_right
+				var nudge = clampf(cam_distance * 0.4, 8.0, 30.0)
+				cam_pan_velocity += dir.normalized() * nudge
 		elif event.keycode == KEY_ESCAPE:
 			input_mode = "select"
 			selected_contact = false
 			order_notice = "Target selection cancelled. Existing orders are unchanged."
 	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			if event.pressed:
+				is_panning_mouse = true
+				last_pan_mouse_pos = event.position
+				cam_following_player = false
+				cam_pan_velocity = Vector3.ZERO
+			else:
+				is_panning_mouse = false
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			if event.pressed:
 				is_orbiting = true
 				last_mouse_pos = event.position
@@ -2349,11 +2393,22 @@ func _unhandled_input(event: InputEvent) -> void:
 						else:
 							# Default / nothing selected: auto-assume player is trying to move tank there
 							_queue_move(hit)
-	elif event is InputEventMouseMotion and is_orbiting:
-		var delta_mouse = event.position - last_mouse_pos
-		last_mouse_pos = event.position
-		if (event.position - right_click_down_pos).length() > 6.0:
-			right_click_dragged = true
-		cam_yaw += delta_mouse.x * 0.006
-		cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-86.0), deg_to_rad(-10.0))
+	elif event is InputEventMouseMotion:
+		if is_panning_mouse:
+			var delta_mouse = event.position - last_pan_mouse_pos
+			last_pan_mouse_pos = event.position
+			cam_following_player = false
+			var factor = maxf(0.012, cam_distance * 0.0016)
+			var cam_forward = Vector3(-sin(cam_yaw), 0, -cos(cam_yaw))
+			var cam_right = Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
+			var drag_delta = (-cam_right * delta_mouse.x + cam_forward * delta_mouse.y) * factor
+			cam_target += drag_delta
+			cam_pan_velocity = drag_delta * 10.0
+		elif is_orbiting:
+			var delta_mouse = event.position - last_mouse_pos
+			last_mouse_pos = event.position
+			if (event.position - right_click_down_pos).length() > 6.0:
+				right_click_dragged = true
+			cam_yaw += delta_mouse.x * 0.006
+			cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-86.0), deg_to_rad(-10.0))
 
