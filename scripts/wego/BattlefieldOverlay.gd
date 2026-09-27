@@ -219,7 +219,7 @@ func _draw() -> void:
 		draw_arc(destination, 10, 0, TAU, 32, BLUE, 2, true)
 		draw_line(destination + Vector2(-6, 0), destination + Vector2(6, 0), BLUE, 2)
 		draw_line(destination + Vector2(0, -6), destination + Vector2(0, 6), BLUE, 2)
-		_tag(destination + Vector2(0, 16), "%.0f m" % game.player.position.distance_to(game.travel_target), BLUE)
+		_tag(destination + Vector2(0, 16), "ROUTE • %.0f m" % game.player.position.distance_to(game.travel_target), BLUE)
 
 	# 4. Firing Solution & Aim Point
 	if game.aim_selected or game.fields.fire.button_pressed:
@@ -240,42 +240,43 @@ func _draw() -> void:
 		for offset in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
 			draw_line(aim + offset * 6, aim + offset * 15, tint, 2, true)
 			
-		# Aim Uncertainty / Dispersion Ellipse
-		var sol = game.player_firing_solution
-		if sol != null:
-			var ellipse_pts = PackedVector2Array()
-			var center_pt = sol.ellipse_center
-			var major_dir = Vector3(sin(sol.ellipse_angle_rad), 0, -cos(sol.ellipse_angle_rad))
-			var minor_dir = major_dir.cross(Vector3.UP)
-			var visual_major = clampf(sol.ellipse_major_m, 1.8, 6.0)
-			var visual_minor = clampf(sol.ellipse_minor_m, 1.0, 4.0)
-			var valid_ellipse = true
-			for i in range(33):
-				var ang = TAU * i / 32.0
-				var p3d = center_pt + major_dir * (cos(ang) * visual_major) + minor_dir * (sin(ang) * visual_minor)
-				if cam != null and cam.is_position_behind(p3d):
-					valid_ellipse = false
-					break
-				ellipse_pts.append(screen(p3d + Vector3.UP * 0.2))
-			if valid_ellipse and ellipse_pts.size() >= 3:
-				draw_polyline(ellipse_pts, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
-			if firing:
-				_tag(aim + Vector2(0, 20), "AIM POINT • " + sol.solution_quality, tint)
-		else:
-			var spread: float = clampf(game.player.position.distance_to(point) * game._dispersion(game.player) * 2, 0.3, 5.0)
-			var ellipse = PackedVector2Array()
-			var valid_ellipse = true
-			for i in range(33):
-				var angle = TAU * i / 32.0
-				var p3d = Vector3(point.x, 0.3, point.z) + Vector3(cos(angle) * spread, 0, sin(angle) * spread)
-				if cam != null and cam.is_position_behind(p3d):
-					valid_ellipse = false
-					break
-				ellipse.append(screen(p3d))
-			if valid_ellipse and ellipse.size() >= 3:
-				draw_polyline(ellipse, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
-			if firing:
-				_tag(aim + Vector2(0, 20), "FIRE TARGET", tint)
+		# Aim Uncertainty / Dispersion Ellipse (Telemetric data shown only in F3 debug mode)
+		if game.debug_overlay_enabled:
+			var sol = game.player_firing_solution
+			if sol != null:
+				var ellipse_pts = PackedVector2Array()
+				var center_pt = sol.ellipse_center
+				var major_dir = Vector3(sin(sol.ellipse_angle_rad), 0, -cos(sol.ellipse_angle_rad))
+				var minor_dir = major_dir.cross(Vector3.UP)
+				var visual_major = clampf(sol.ellipse_major_m, 1.8, 6.0)
+				var visual_minor = clampf(sol.ellipse_minor_m, 1.0, 4.0)
+				var valid_ellipse = true
+				for i in range(33):
+					var ang = TAU * i / 32.0
+					var p3d = center_pt + major_dir * (cos(ang) * visual_major) + minor_dir * (sin(ang) * visual_minor)
+					if cam != null and cam.is_position_behind(p3d):
+						valid_ellipse = false
+						break
+					ellipse_pts.append(screen(p3d + Vector3.UP * 0.2))
+				if valid_ellipse and ellipse_pts.size() >= 3:
+					draw_polyline(ellipse_pts, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
+				if firing:
+					_tag(aim + Vector2(0, 20), "AIM POINT • " + sol.solution_quality, tint)
+			else:
+				var spread: float = clampf(game.player.position.distance_to(point) * game._dispersion(game.player) * 2, 0.3, 5.0)
+				var ellipse = PackedVector2Array()
+				var valid_ellipse = true
+				for i in range(33):
+					var angle = TAU * i / 32.0
+					var p3d = Vector3(point.x, 0.3, point.z) + Vector3(cos(angle) * spread, 0, sin(angle) * spread)
+					if cam != null and cam.is_position_behind(p3d):
+						valid_ellipse = false
+						break
+					ellipse.append(screen(p3d))
+				if valid_ellipse and ellipse.size() >= 3:
+					draw_polyline(ellipse, Color(tint.r, tint.g, tint.b, 0.75), 1.5, true)
+				if firing:
+					_tag(aim + Vector2(0, 20), "FIRE TARGET", tint)
 
 	# 5. Shot Tracers & Results
 	for event in game.shot_events:

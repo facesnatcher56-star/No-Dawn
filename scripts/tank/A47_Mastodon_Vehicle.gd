@@ -43,7 +43,7 @@ func get_optic_marker() -> Node3D:
 	if gun_assembly != null:
 		mkr = Node3D.new()
 		mkr.name = "MKR_GunnerOptic"
-		mkr.position = Vector3(0.32, 0.08, -1.90)
+		mkr.position = Vector3(0.52, 0.35, -2.40)
 		gun_assembly.add_child(mkr)
 		return mkr
 	return null

@@ -47,9 +47,9 @@ var steps: Array = [
 	{
 		"id": "camera",
 		"badge": "STEP 1 OF 8 • BASIC CONTROLS",
-		"title": "TACTICAL RECONNAISSANCE & CAMERA",
-		"text": "Welcome, Commander. You are in command of the A-47 Mastodon heavy tank.\n\n• Hold [Right Mouse Button] & drag to orbit and tilt your perspective.\n• Scroll [Mouse Wheel] to zoom between close tactical view and satellite overview.\n• Use [W][A][S][D] to pan across the battlefield, and [F] to re-center on your tank.",
-		"objective": "Orbit or zoom your tactical camera view",
+		"title": "TACTICAL CAMERA & PERSPECTIVE",
+		"text": "Hold [RMB] to orbit/tilt. Roll [Wheel] to zoom. [WASD] pans camera, [F] re-centers on tank.",
+		"objective": "Orbit (RMB) or zoom (Wheel) camera view",
 		"hint": "Try holding RMB to rotate or rolling the wheel to zoom out.",
 		"target_tag": "player_tank"
 	},
@@ -57,7 +57,7 @@ var steps: Array = [
 		"id": "move",
 		"badge": "STEP 2 OF 8 • WEGO MANEUVER",
 		"title": "PLOTTING MOVEMENT WAYPOINT",
-		"text": "No Dawn executes combat in simultaneous WEGO pulses: you plan during paused time, then both sides execute together.\n\n• Left-click directly on the road ahead of your Mastodon to plot a movement waypoint.\n• You can also click the [MOVE] button on the bottom contextual action bar, then click clear ground.",
+		"text": "Left-click on the road ahead to plot a movement waypoint, or click [MOVE] on the bottom action bar.",
 		"objective": "Plot a movement waypoint along the road",
 		"hint": "Left-click on the road ahead of the Mastodon.",
 		"target_tag": "action_move"
@@ -65,8 +65,8 @@ var steps: Array = [
 	{
 		"id": "observe",
 		"badge": "STEP 3 OF 8 • RECONNAISSANCE",
-		"title": "COMMANDER'S OBSERVATION SECTOR",
-		"text": "You cannot destroy what you cannot find. Your Commander uses panoramic vision blocks to search for threats.\n\n• Click [OBSERVE] on the bottom action bar.\n• Then click down the main avenue towards the industrial facility in the distance.\n• A blue observation cone will designate your commander's search arc.",
+		"title": "COMMANDER OBSERVATION SECTOR",
+		"text": "Click [OBSERVE] on the bottom bar, then click down the avenue to designate Commander's search sector.",
 		"objective": "Designate an observation sector down the road",
 		"hint": "Click [OBSERVE], then click the distant road.",
 		"target_tag": "action_observe"
@@ -74,8 +74,8 @@ var steps: Array = [
 	{
 		"id": "execute",
 		"badge": "STEP 4 OF 8 • WEGO EXECUTION",
-		"title": "EXECUTE SIMULTANEOUS PULSE",
-		"text": "Your orders are planned for this 8.0-second pulse. Simultaneous execution will now carry them out.\n\n• Click the green [EXECUTE] button at the top center.\n• Both your tank and the enemy will act simultaneously in real time. You can pause or resume anytime.",
+		"title": "SIMULTANEOUS PULSE EXECUTION",
+		"text": "Click the green [EXECUTE] button at top center to begin the simultaneous 8.0-second turn pulse.",
 		"objective": "Click [EXECUTE] to start simultaneous turn",
 		"hint": "Click the green [EXECUTE] button at the top.",
 		"target_tag": "execute_button"
@@ -84,7 +84,7 @@ var steps: Array = [
 		"id": "contact",
 		"badge": "STEP 5 OF 8 • TARGET ACQUISITION",
 		"title": "ENEMY DETECTED: CONTACT A",
-		"text": "Observation paid off! Your commander has spotted CONTACT A down the avenue.\n\n• Look at the CONTACT A label in the 3D world: note estimated range (~1,500m) and uncertainty.\n• The bottom action bar has dynamically adapted to provide contact engagement commands!",
+		"text": "Target spotted ~1,500m down the road! Note estimated range and dynamic contact commands below.",
 		"objective": "Review contact report (or wait for pulse to complete)",
 		"hint": "Contact detected ~1,500m down the road.",
 		"target_tag": "contact_label"
@@ -92,8 +92,8 @@ var steps: Array = [
 	{
 		"id": "gunner_sight",
 		"badge": "STEP 6 OF 8 • OPTICAL GUNNERY",
-		"title": "TAKE STATION AT GUNNER SIGHT",
-		"text": "To engage targets downrange, take station at the primary periscope optic.\n\n• Press [ G ] on your keyboard or click [ GUNNER SIGHT ] on the bottom action bar.\n• Your camera will mount directly to the physical 10.5° periscope optic alongside the 92mm cannon.",
+		"title": "ENTER GUNNER SIGHT STATION",
+		"text": "Press [G] or click [GUNNER SIGHT] to mount the physical periscope optic beside the 92mm cannon.",
 		"objective": "Press [ G ] or click [ GUNNER SIGHT ]",
 		"hint": "Press [G] to switch to periscope view.",
 		"target_tag": "action_gunner"
@@ -101,8 +101,8 @@ var steps: Array = [
 	{
 		"id": "range_drum",
 		"badge": "STEP 7 OF 8 • RANGE & LAYING",
-		"title": "CALIBRATE MECHANICAL RANGE DRUM",
-		"text": "You are looking down the barrel of the 92mm gun. Contact A is estimated at ~1,500m.\n\n• Use [Mouse Wheel] or [ [ ] / [ ] ] keys to dial the RANGE DRUM (bottom-right) to ~1500m.\n• The ballistic optic automatically applies superelevation to match your dial.\n• Aim the central optical chevron onto the enemy target.",
+		"title": "CALIBRATE RANGE DRUM & AIM",
+		"text": "Use [Wheel] or [ [ ] / [ ] ] to dial range drum to ~1500m. Superelevation adjusts automatically.",
 		"objective": "Dial range drum to ~1500m (aim at target)",
 		"hint": "Scroll wheel to dial drum. Press [Enter] or [N] to proceed.",
 		"target_tag": "range_drum"
@@ -110,8 +110,8 @@ var steps: Array = [
 	{
 		"id": "fire_shot",
 		"badge": "STEP 8 OF 8 • BALLISTIC ENGAGEMENT",
-		"title": "QUEUE FIRE ORDER & ARMOR REPLAY",
-		"text": "When aligned on target, Left-click or press [Space] to queue a fire order!\n\n• When a shot impacts, the Damage Assessment Viewer replays terminal ballistics, armor penetration angle, spall cone, and internal module damage.\n• Press [G] or [Esc] anytime to return to tactical overview.\n\nYou are ready for combat, Commander!",
+		"title": "QUEUE FIRE ORDER & REPLAY",
+		"text": "Left-click or press [Space] to queue a fire order. Ballistics & armor replay inspects terminal damage!",
 		"objective": "Queue fire order or click Finish Tutorial",
 		"hint": "Left-click in sight to fire, then click FINISH TUTORIAL.",
 		"target_tag": "reticle_center"
@@ -146,54 +146,56 @@ func _build_tutorial_ui() -> void:
 	indicator_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root_control.add_child(indicator_canvas)
 
-	# Main Tutorial Card Panel
+	# Compact Main Tutorial Card Panel (~112px strip in top-right corner)
 	main_panel = PanelContainer.new()
 	main_panel.name = "TutorialCard"
 	main_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	main_panel.anchor_left = 0.62
-	main_panel.anchor_top = 0.05
-	main_panel.anchor_right = 0.985
-	main_panel.anchor_bottom = 0.44
-	main_panel.offset_left = 0
-	main_panel.offset_top = 0
-	main_panel.offset_right = 0
-	main_panel.offset_bottom = 0
+	main_panel.anchor_left = 1.0
+	main_panel.anchor_right = 1.0
+	main_panel.anchor_top = 0.0
+	main_panel.anchor_bottom = 0.0
+	main_panel.offset_left = -460.0
+	main_panel.offset_right = -16.0
+	main_panel.offset_top = 10.0
+	main_panel.offset_bottom = 124.0
+	main_panel.custom_minimum_size = Vector2(444, 114)
 	main_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var style = StyleBoxFlat.new()
 	style.bg_color = Color(0.06, 0.11, 0.14, 0.94)
 	style.border_color = Color(0.25, 0.65, 0.60, 0.95)
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 14
-	style.content_margin_top = 10
-	style.content_margin_right = 14
-	style.content_margin_bottom = 12
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 10
+	style.content_margin_top = 6
+	style.content_margin_right = 10
+	style.content_margin_bottom = 6
 	main_panel.add_theme_stylebox_override("panel", style)
 	root_control.add_child(main_panel)
 
 	var v_box = VBoxContainer.new()
-	v_box.add_theme_constant_override("separation", 6)
+	v_box.add_theme_constant_override("separation", 3)
 	main_panel.add_child(v_box)
 
 	# Header: Step badge and Skip/Close
 	var header_row = HBoxContainer.new()
+	header_row.add_theme_constant_override("separation", 6)
 	v_box.add_child(header_row)
 
 	step_badge_label = Label.new()
 	step_badge_label.text = "STEP 1 OF 8 • BASIC CONTROLS"
-	step_badge_label.add_theme_font_size_override("font_size", 11)
+	step_badge_label.add_theme_font_size_override("font_size", 10)
 	step_badge_label.add_theme_color_override("font_color", Color("8cddf0"))
 	step_badge_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header_row.add_child(step_badge_label)
 
 	skip_button = Button.new()
-	skip_button.text = "SKIP ✕"
-	skip_button.tooltip_text = "Close interactive tutorial"
-	skip_button.custom_minimum_size = Vector2(55, 22)
+	skip_button.text = "✕"
+	skip_button.tooltip_text = "Close tutorial (reopen anytime with [?] button)"
+	skip_button.custom_minimum_size = Vector2(24, 18)
 	skip_button.add_theme_font_size_override("font_size", 10)
 	var skip_style = StyleBoxFlat.new()
-	skip_style.bg_color = Color(0.20, 0.12, 0.12, 0.85)
+	skip_style.bg_color = Color(0.22, 0.12, 0.12, 0.85)
 	skip_style.set_corner_radius_all(3)
 	skip_button.add_theme_stylebox_override("normal", skip_style)
 	skip_button.pressed.connect(_on_skip_pressed)
@@ -201,77 +203,56 @@ func _build_tutorial_ui() -> void:
 
 	# Step Title
 	step_title_label = Label.new()
-	step_title_label.text = "TACTICAL RECONNAISSANCE & CAMERA"
-	step_title_label.add_theme_font_size_override("font_size", 14)
+	step_title_label.text = "TACTICAL CAMERA & PERSPECTIVE"
+	step_title_label.add_theme_font_size_override("font_size", 12)
 	step_title_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85))
 	v_box.add_child(step_title_label)
-
-	var sep = HSeparator.new()
-	sep.add_theme_constant_override("separation", 4)
-	v_box.add_child(sep)
 
 	# Step Instructions
 	step_text_label = Label.new()
 	step_text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	step_text_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	step_text_label.add_theme_font_size_override("font_size", 11)
+	step_text_label.add_theme_font_size_override("font_size", 10)
 	step_text_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.92))
 	v_box.add_child(step_text_label)
 
-	# Objective Box
-	var obj_box = PanelContainer.new()
-	var obj_style = StyleBoxFlat.new()
-	obj_style.bg_color = Color(0.04, 0.08, 0.10, 0.88)
-	obj_style.border_color = Color(0.18, 0.35, 0.32, 0.8)
-	obj_style.set_border_width_all(1)
-	obj_style.set_corner_radius_all(4)
-	obj_style.content_margin_left = 8
-	obj_style.content_margin_top = 5
-	obj_style.content_margin_right = 8
-	obj_style.content_margin_bottom = 5
-	obj_box.add_theme_stylebox_override("panel", obj_style)
-	v_box.add_child(obj_box)
+	# Bottom Row: Navigation + Objective Status
+	var bottom_row = HBoxContainer.new()
+	bottom_row.add_theme_constant_override("separation", 6)
+	v_box.add_child(bottom_row)
 
-	var obj_row = HBoxContainer.new()
-	obj_row.add_theme_constant_override("separation", 6)
-	obj_box.add_child(obj_row)
+	prev_button = Button.new()
+	prev_button.text = "◀"
+	prev_button.tooltip_text = "Previous step [P]"
+	prev_button.custom_minimum_size = Vector2(28, 22)
+	prev_button.add_theme_font_size_override("font_size", 10)
+	prev_button.pressed.connect(_on_prev_pressed)
+	bottom_row.add_child(prev_button)
 
 	objective_icon_label = Label.new()
 	objective_icon_label.text = "[ ○ ]"
-	objective_icon_label.add_theme_font_size_override("font_size", 11)
+	objective_icon_label.add_theme_font_size_override("font_size", 10)
 	objective_icon_label.add_theme_color_override("font_color", Color("ffd166"))
-	obj_row.add_child(objective_icon_label)
+	bottom_row.add_child(objective_icon_label)
 
 	objective_text_label = Label.new()
 	objective_text_label.text = "Objective in progress..."
 	objective_text_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	objective_text_label.add_theme_font_size_override("font_size", 11)
+	objective_text_label.clip_text = true
+	objective_text_label.add_theme_font_size_override("font_size", 10)
 	objective_text_label.add_theme_color_override("font_color", Color("ffd166"))
-	obj_row.add_child(objective_text_label)
-
-	# Bottom Navigation
-	var nav_row = HBoxContainer.new()
-	nav_row.add_theme_constant_override("separation", 8)
-	v_box.add_child(nav_row)
-
-	prev_button = Button.new()
-	prev_button.text = "◀ PREV"
-	prev_button.custom_minimum_size = Vector2(70, 26)
-	prev_button.add_theme_font_size_override("font_size", 11)
-	prev_button.pressed.connect(_on_prev_pressed)
-	nav_row.add_child(prev_button)
+	bottom_row.add_child(objective_text_label)
 
 	next_button = Button.new()
 	next_button.text = "NEXT ▶"
-	next_button.custom_minimum_size = Vector2(90, 26)
-	next_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	next_button.add_theme_font_size_override("font_size", 11)
+	next_button.tooltip_text = "Advance to next step [N] or [Enter]"
+	next_button.custom_minimum_size = Vector2(75, 22)
+	next_button.add_theme_font_size_override("font_size", 10)
 	var next_style = StyleBoxFlat.new()
 	next_style.bg_color = Color("285e55")
-	next_style.set_corner_radius_all(4)
+	next_style.set_corner_radius_all(3)
 	next_button.add_theme_stylebox_override("normal", next_style)
 	next_button.pressed.connect(_on_next_pressed)
-	nav_row.add_child(next_button)
+	bottom_row.add_child(next_button)
 
 	# Discrete Reopen Button (visible when tutorial is minimized or finished)
 	reopen_button = Button.new()
@@ -279,14 +260,14 @@ func _build_tutorial_ui() -> void:
 	reopen_button.text = "? TUTORIAL"
 	reopen_button.tooltip_text = "Open step-by-step interactive walkthrough"
 	reopen_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	reopen_button.anchor_left = 0.88
-	reopen_button.anchor_top = 0.012
-	reopen_button.anchor_right = 0.985
-	reopen_button.anchor_bottom = 0.05
-	reopen_button.offset_left = 0
-	reopen_button.offset_top = 0
-	reopen_button.offset_right = 0
-	reopen_button.offset_bottom = 0
+	reopen_button.anchor_left = 1.0
+	reopen_button.anchor_right = 1.0
+	reopen_button.anchor_top = 0.0
+	reopen_button.anchor_bottom = 0.0
+	reopen_button.offset_left = -105.0
+	reopen_button.offset_right = -15.0
+	reopen_button.offset_top = 10.0
+	reopen_button.offset_bottom = 32.0
 	var reopen_style = StyleBoxFlat.new()
 	reopen_style.bg_color = Color(0.12, 0.22, 0.20, 0.85)
 	reopen_style.border_color = Color(0.3, 0.75, 0.6, 0.8)

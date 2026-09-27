@@ -146,9 +146,46 @@ func set_active(active: bool) -> void:
 func is_active() -> bool:
 	return sight_camera != null and sight_camera.current
 
-# Adjust sight range manually (mouse wheel)
+# Adjust sight range manually in sensible mechanical increments (e.g. 50m / 25m)
 func adjust_sight_range(delta_m: float) -> void:
-	sight_range_m = clampf(sight_range_m + delta_m, MIN_SIGHT_RANGE, MAX_SIGHT_RANGE)
+	var new_range = sight_range_m + delta_m
+	var step = 25.0 if (absf(delta_m) <= 25.0) else 50.0
+	sight_range_m = clampf(roundf(new_range / step) * step, MIN_SIGHT_RANGE, MAX_SIGHT_RANGE)
+
+func get_optic_global_position() -> Vector3:
+	if sight_camera != null and sight_camera.is_inside_tree():
+		return sight_camera.global_position
+	if vehicle != null:
+		var turret_yaw = vehicle.model.turret_yaw if ("model" in vehicle and vehicle.model != null) else 0.0
+		var turret_rot = vehicle.rotation.y + turret_yaw
+		var quat = Quaternion.from_euler(Vector3(0.0, turret_rot, 0.0))
+		return vehicle.global_position + quat * Vector3(0.52, 2.80, -2.40)
+	return Vector3.ZERO
+
+func get_optic_forward_vector() -> Vector3:
+	if sight_camera != null and sight_camera.is_inside_tree():
+		return -sight_camera.global_transform.basis.z
+	var ammo = vehicle.get_active_ammo() if vehicle != null else null
+	var optic_pitch = current_bore_pitch - get_ballistic_elevation(sight_range_m, ammo)
+	var look_quat = Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0))
+	return look_quat * Vector3(0, 0, -1)
+
+# Calculates the gun bore firing vector converging with optic line of sight at sight_range_m
+func get_converged_bore_vector(muzzle_pos: Vector3, ammo: AmmunitionData = null) -> Vector3:
+	var optic_pos = get_optic_global_position()
+	var sight_fwd = get_optic_forward_vector()
+	var target_pt = optic_pos + sight_fwd * sight_range_m
+	
+	# Horizontal azimuth from muzzle to aim point
+	var horiz_dir = (target_pt - muzzle_pos)
+	var horiz_yaw = atan2(horiz_dir.x, -horiz_dir.z)
+	
+	# Elevation includes commanded pitch + ballistic superelevation for sight_range_m
+	var ballistic_elev = get_ballistic_elevation(sight_range_m, ammo)
+	var elev_pitch = clampf(commanded_pitch + ballistic_elev, MIN_ELEVATION_RAD, MAX_ELEVATION_RAD)
+	
+	var bore_quat = Quaternion.from_euler(Vector3(elev_pitch, horiz_yaw, 0.0))
+	return bore_quat * Vector3(0, 0, -1)
 
 # Calculates required ballistic superelevation angle for chosen sight range
 func get_ballistic_elevation(range_m: float = -1.0, ammo: AmmunitionData = null) -> float:

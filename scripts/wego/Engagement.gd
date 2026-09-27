@@ -915,6 +915,20 @@ func _stop_and_edit() -> void:
 
 func _append_action(kind: String, point: Vector3, limit_override: float = -1) -> void:
 	if not _can_edit_orders(): return
+	# ONE pending main-gun fire order at a time.
+	# If player presses FIRE again before execution, update / replace existing pending order.
+	if kind == "fire":
+		for i in range(action_queue.actions.size()):
+			if action_queue.actions[i].kind == "fire":
+				action_queue.actions[i].point = point
+				action_queue.actions[i].limit = next_action_limit.value if limit_override < 0 else limit_override
+				action_queue.actions[i].spent = 0.0
+				action_queue.actions[i].completed = false
+				using_queue = true
+				_sync_queue_markers()
+				_rebuild_queue()
+				order_notice = "Updated pending fire order."
+				return
 	action_queue.append(kind, point, next_action_limit.value if limit_override < 0 else limit_override, fields.creep.button_pressed)
 	using_queue = true
 	_sync_queue_markers()
@@ -1741,6 +1755,9 @@ func _dispersion(tank) -> float:
 func _fire(tank) -> void:
 	if phase != "EXECUTION" or not tank.ready_to_shoot(): return
 	var origin: Vector3 = tank.position + Vector3(0, 2.65, 0)
+	var muzzle_mkr = tank.find_child("MKR_MainGun_Muzzle", true, false)
+	if muzzle_mkr != null and muzzle_mkr.is_inside_tree():
+		origin = muzzle_mkr.global_position
 	var dir: Vector3
 	var range_m: float = 75.0
 	var ammo: AmmunitionData = tank.get_active_ammo() if tank.has_method("get_active_ammo") else AmmunitionData.create_apcbc()
@@ -1750,8 +1767,8 @@ func _fire(tank) -> void:
 		dir = player_firing_solution.compute_shell_direction(origin, rng)
 		range_m = player_firing_solution.range_m
 	elif tank.gunner_sight != null:
-		# Authentic gunnery: launch shell along physical bore orientation!
-		dir = tank.gunner_sight.get_bore_vector()
+		# Physical gunnery: launch shell from muzzle converging with optic line of sight at sight_range_m!
+		dir = tank.gunner_sight.get_converged_bore_vector(origin, ammo)
 		range_m = tank.gunner_sight.sight_range_m
 		var cone = tank.gunner_sight.calculate_dispersion(ammo)
 		var right = dir.cross(Vector3.UP).normalized()

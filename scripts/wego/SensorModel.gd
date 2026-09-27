@@ -298,21 +298,47 @@ func evaluate(
 		result["acoustic_observation"] = obs_acoustic
 
 	# Impact observation (check if shell landing was observed)
-	if impact_pos != null and has_clear_los:
-		var target_dist = observer.position.distance_to(target.position)
-		var impact_dist = observer.position.distance_to(impact_pos)
-		var diff = impact_dist - target_dist
-		var relation = "HIT"
-		if diff < -4.0:
-			relation = "SHORT"
-		elif diff > 4.0:
-			relation = "OVER"
+	if impact_pos != null:
+		var impact_vec = impact_pos as Vector3
+		var has_impact_los = false
+		if world_3d != null:
+			var space_state = world_3d.direct_space_state
+			if space_state != null:
+				# Physical raycast from observer eye to impact burst (raised slightly above ground to catch plume)
+				var impact_target = impact_vec + Vector3(0, 0.6, 0)
+				var query = PhysicsRayQueryParameters3D.create(observer_eye, impact_target, 1)
+				var hit = space_state.intersect_ray(query)
+				has_impact_los = hit.is_empty()
 		else:
-			# Check lateral
-			var gun_dir = (target.position - observer.position).normalized()
-			var lateral = (impact_pos - target.position).cross(Vector3.UP).dot(gun_dir)
-			if lateral > 2.0: relation = "RIGHT"
-			elif lateral < -2.0: relation = "LEFT"
-		result["impact_observation"] = relation
+			has_impact_los = true
+			
+		# Impact is only observed if within active observer FOV (Gunner or Commander)
+		var impact_in_view = false
+		if "observers" in observer and not observer.observers.is_empty():
+			for role_key in observer.observers:
+				var obs = observer.observers[role_key]
+				if obs.is_active and obs.can_observe(observer):
+					if obs.is_point_in_fov(impact_vec + Vector3(0, 0.5, 0), observer_eye):
+						impact_in_view = true
+						break
+		else:
+			impact_in_view = has_clear_los
+			
+		if has_impact_los and impact_in_view:
+			var target_dist = observer.position.distance_to(target.position)
+			var impact_dist = observer.position.distance_to(impact_vec)
+			var diff = impact_dist - target_dist
+			var relation = "HIT"
+			if diff < -4.0:
+				relation = "SHORT"
+			elif diff > 4.0:
+				relation = "OVER"
+			else:
+				# Check lateral
+				var gun_dir = (target.position - observer.position).normalized()
+				var lateral = (impact_vec - target.position).cross(Vector3.UP).dot(gun_dir)
+				if lateral > 2.0: relation = "RIGHT"
+				elif lateral < -2.0: relation = "LEFT"
+			result["impact_observation"] = relation
 
 	return result
