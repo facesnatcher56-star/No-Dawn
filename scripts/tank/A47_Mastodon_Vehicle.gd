@@ -35,6 +35,19 @@ func rotate_turret(radians: float) -> void:
 func elevate_gun(radians: float) -> void:
 	if anim: anim.set_gun_pitch(radians)
 
+func get_optic_marker() -> Node3D:
+	var mkr = find_child("MKR_GunnerOptic", true, false)
+	if mkr != null:
+		return mkr
+	var gun_assembly = find_child("GunAssembly", true, false)
+	if gun_assembly != null:
+		mkr = Node3D.new()
+		mkr.name = "MKR_GunnerOptic"
+		mkr.position = Vector3(0.32, 0.08, -1.90)
+		gun_assembly.add_child(mkr)
+		return mkr
+	return null
+
 func fire_recoil() -> void:
 	if anim: anim.trigger_recoil()
 

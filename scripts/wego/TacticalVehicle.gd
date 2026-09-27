@@ -142,6 +142,11 @@ func set_debug_visuals(enabled: bool) -> void:
 		if is_instance_valid(b):
 			b.visible = enabled
 
+func get_gunner_optic_marker() -> Node3D:
+	if visual_tank != null and visual_tank.has_method("get_optic_marker"):
+		return visual_tank.get_optic_marker()
+	return null
+
 func _apply_tactical_materials(is_enemy: bool) -> void:
 	if visual_tank == null or visual_tank.visual == null: return
 	

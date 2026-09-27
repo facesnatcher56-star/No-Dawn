@@ -515,6 +515,35 @@ func _build_tactical_terrain_and_ridges() -> void:
 		curb_ew.position = Vector3(-85.0, 0.08, z_side)
 		add_child(curb_ew)
 
+	# 1e. Obvious Red/Orange Calibration Target Panel Landmark (Requirement 5)
+	var target_panel = MeshInstance3D.new()
+	var tpm = BoxMesh.new()
+	tpm.size = Vector3(0.3, 3.5, 3.5)
+	var tp_mat = StandardMaterial3D.new()
+	tp_mat.albedo_color = Color(0.98, 0.32, 0.10) # Bright high-visibility red-orange
+	tp_mat.emission_enabled = true
+	tp_mat.emission = Color(0.95, 0.28, 0.08)
+	tp_mat.emission_energy_multiplier = 0.4
+	target_panel.mesh = tpm
+	target_panel.material_override = tp_mat
+	target_panel.position = Vector3(-120.0, 2.5, 118.0)
+	target_panel.name = "LANDMARK_TargetPanel"
+	add_child(target_panel)
+	
+	var bullseye = MeshInstance3D.new()
+	var bm = CylinderMesh.new()
+	bm.top_radius = 0.6
+	bm.bottom_radius = 0.6
+	bm.height = 0.32
+	var bmat = StandardMaterial3D.new()
+	bmat.albedo_color = Color(1.0, 0.95, 0.2)
+	bullseye.mesh = bm
+	bullseye.material_override = bmat
+	bullseye.rotation.z = deg_to_rad(90.0)
+	bullseye.position = Vector3(-120.0, 2.5, 118.0)
+	bullseye.name = "LANDMARK_Bullseye"
+	add_child(bullseye)
+
 	# 1d. Roadside infrastructure props (safely outside maneuver swept corridor Z=106..114)
 	# Street lamps along Z = 117.5 (north of curb)
 	for lx in [-170, -135, -100, -30, 20]:

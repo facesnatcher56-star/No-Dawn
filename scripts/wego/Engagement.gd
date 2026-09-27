@@ -24,6 +24,9 @@ const GunnerSightSystem = preload("res://scripts/wego/GunnerSightSystem.gd")
 var view_mode: String = "TACTICAL"
 var gunner_overlay: GunnerReticleOverlay
 var gunner_sight_btn: Button
+var tactical_ui: Control
+var contextual_row: HBoxContainer
+var selected_contact: bool = false
 
 var world_graphics: WorldPlanningGraphics
 var ghost_tank: A47_Mastodon_Vehicle
@@ -59,6 +62,9 @@ var drawer_orders_btn: Button
 var drawer_crew_btn: Button
 var drawer_intel_btn: Button
 var drawer_shots_btn: Button
+var contextual_box: Control
+var contextual_buttons: Array[Button] = []
+var mode_state_label: Label
 
 var player
 var enemy
@@ -172,6 +178,8 @@ func setup_spawn_positions(distance: float = 1500.0, player_base: Vector3 = Vect
 	var e_pos = Vector3(half_dist, 0.0, enemy_base.z)
 	if is_instance_valid(player):
 		player.position = p_pos
+		if player.gunner_sight != null:
+			player.gunner_sight.sync_with_vehicle()
 	if is_instance_valid(enemy):
 		enemy.position = e_pos
 	return validate_spawn_placement(p_pos, e_pos)
@@ -319,7 +327,9 @@ func _set_map_running(enabled: bool) -> void:
 	map_scripts.clear()
 	map_particles.clear()
 	map_audio.clear()
-	var pending: Array[Node] = [$MapBuilder]
+	var map_node = get_node_or_null("MapBuilder")
+	if map_node == null: return
+	var pending: Array[Node] = [map_node]
 	while not pending.is_empty():
 		var node: Node = pending.pop_back()
 		node.set_process(false)
@@ -448,8 +458,15 @@ func _build_ui() -> void:
 	gunner_overlay = GunnerReticleOverlay.new()
 	root.add_child(gunner_overlay)
 	gunner_overlay.visible = false
-	var left = _panel(root, 0, 0, 0.19, 1.0)
+	tactical_ui = Control.new()
+	tactical_ui.name = "TacticalUI"
+	tactical_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tactical_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(tactical_ui)
+
+	var left = _panel(tactical_ui, 0, 0, 0.22, 1.0)
 	left_drawer = left.get_parent().get_parent()
+	left_drawer.visible = false
 	var left_header = HBoxContainer.new()
 	left.add_child(left_header)
 	var left_title = _label(left_header, "ORDERS", 18)
@@ -520,13 +537,15 @@ func _build_ui() -> void:
 	# Subsystems & Actions
 	var utility = HBoxContainer.new()
 	left.add_child(utility)
+	fire_button = _button(utility, "FIRE", func(): _set_mode("fire"), 28)
+	fire_button.toggle_mode = true
 	reload_button = _button(utility, "RELOAD", func(): _append_action("reload", player.position), 28)
 	wait_button = _button(utility, "WAIT 1s", func(): _append_action("wait", player.position, 1.0), 28)
 	cancel_button = _button(utility, "CLEAR", _clear_orders, 28)
 	
 	# Retain backward-compatible references
-	fire_button = Button.new()
 	scan_button = Button.new()
+	scan_button.pressed.connect(_queue_scan)
 	stop_button = Button.new()
 	controls.erase(stop_button)
 	_label(left, "QUEUE", 13)
@@ -625,7 +644,7 @@ func _build_ui() -> void:
 	_button(left, "Restart engagement", func(): get_tree().reload_current_scene(), 26)
 	controls.pop_back()
 	controls.erase(advanced_toggle)
-	var right = _panel(root, 0.81, 0, 1.0, 1.0)
+	var right = _panel(tactical_ui, 0.78, 0, 1.0, 1.0)
 	right_drawer = right.get_parent().get_parent()
 	right_drawer.visible = false
 	var right_header = HBoxContainer.new()
@@ -634,47 +653,30 @@ func _build_ui() -> void:
 	right_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var right_close = Button.new()
 	right_close.text = "▶"
-	right_close.tooltip_text = "Collapse Intelligence Drawer"
+	right_close.tooltip_text = "Collapse Drawer"
 	right_close.custom_minimum_size = Vector2(28, 26)
 	right_close.pressed.connect(func(): right_drawer.visible = false)
 	right_header.add_child(right_close)
-	contact_label = _label(right, "", 12)
-	contact_fire_button = _button(right, "SLEW TURRET TO CONTACT [G]", _slew_to_contact_and_aim, 32)
-	contact_fire_button.tooltip_text = "Slews turret toward Contact A estimate and switches to Gunner Sight."
 	detail_tabs = TabBar.new()
 	detail_tabs.add_theme_font_size_override("font_size", 12)
-	for title in ["HELP", "SHOT", "CREW", "TURN"]: detail_tabs.add_tab(title)
+	for title in ["INTEL", "CREW", "SHOTS", "HELP"]: detail_tabs.add_tab(title)
 	right.add_child(detail_tabs)
-	help_box = VBoxContainer.new()
-	var shot_box = VBoxContainer.new()
+	var intel_box = VBoxContainer.new()
 	var crew_box = VBoxContainer.new()
-	var turn_box = VBoxContainer.new()
-	for box in [help_box, shot_box, crew_box, turn_box]: right.add_child(box)
-	shot_box.visible = false
+	var shot_box = VBoxContainer.new()
+	help_box = VBoxContainer.new()
+	for box in [intel_box, crew_box, shot_box, help_box]: right.add_child(box)
 	crew_box.visible = false
-	turn_box.visible = false
+	shot_box.visible = false
+	help_box.visible = true
 	detail_tabs.tab_changed.connect(func(index):
-		help_box.visible = index == 0
-		shot_box.visible = index == 1
-		crew_box.visible = index == 2
-		turn_box.visible = index == 3)
-	_label(turn_box, "TURN SUMMARY", 15)
-	turn_report = _label(turn_box, "Ready for orders.", 13)
-	turn_shot_buttons = VBoxContainer.new()
-	turn_box.add_child(turn_shot_buttons)
-	turn_box.move_child(turn_shot_buttons, 1)
-	viewer = Viewer.new()
-	viewer.custom_minimum_size = Vector2(230, 160)
-	shot_box.add_child(viewer)
-	_label(shot_box, "Replay: click / Orbit: right-drag", 11)
-	selected_record = OptionButton.new()
-	selected_record.clip_text = true
-	selected_record.fit_to_longest_item = false
-	selected_record.add_item("No armor impacts recorded")
-	selected_record.item_selected.connect(func(index):
-		if index < records.size(): _show_record(records[index]))
-	shot_box.add_child(selected_record)
-	report = _label(shot_box, "Fire a shot to see damage report.", 12)
+		intel_box.visible = index == 0
+		crew_box.visible = index == 1
+		shot_box.visible = index == 2
+		help_box.visible = index == 3)
+	contact_label = _label(intel_box, "", 12)
+	contact_fire_button = _button(intel_box, "QUEUE FIRE AT ESTIMATE", _queue_contact_fire, 32)
+	contact_fire_button.tooltip_text = "Queues shot at Contact A estimate."
 	_label(crew_box, "CREW STATUS", 15)
 	crew_label = _label(crew_box, "", 12)
 	var person = OptionButton.new()
@@ -687,34 +689,61 @@ func _build_ui() -> void:
 		if phase not in ["EXECUTION", "COMPLETE"]:
 			if player.model.reassign(person.selected, station.get_item_text(station.selected)): _log("Crew transfer started.")
 			else: _log("Transfer unavailable."))
+	viewer = Viewer.new()
+	viewer.custom_minimum_size = Vector2(230, 160)
+	shot_box.add_child(viewer)
+	_label(shot_box, "Replay: click / Orbit: right-drag", 11)
+	selected_record = OptionButton.new()
+	selected_record.clip_text = true
+	selected_record.fit_to_longest_item = false
+	selected_record.add_item("No armor impacts recorded")
+	selected_record.item_selected.connect(func(index):
+		if index < records.size(): _show_record(records[index]))
+	shot_box.add_child(selected_record)
+	report = _label(shot_box, "Fire a shot to see damage report.", 12)
+	turn_shot_buttons = VBoxContainer.new()
+	shot_box.add_child(turn_shot_buttons)
+	turn_report = _label(shot_box, "Ready for orders.", 12)
 	_label(help_box, "TACTICAL GUIDE", 15)
 	_label(help_box, "• LEFT-CLICK: Click ground to queue move.\n• RIGHT-CLICK: Cancel / undo last queued order.\n• RIGHT-DRAG: Orbit view (tactical to top-down).\n• MOUSE WHEEL: Zoom tactical / satellite overview.\n• WASD: Pan battlefield • F: Focus on Mastodon.\n• EXECUTE: Simultaneous WEGO pulse execution.", 12)
-	var hint_box = _hud_bar(root, 0.28, 0, 0.72, 0.08)
+
+	# 1. Top Center: State Machine & Time
+	var hint_box = _hud_bar(tactical_ui, 0.32, 0.01, 0.68, 0.08)
+	var top_content = VBoxContainer.new()
+	top_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint_box.add_child(top_content)
+	mode_state_label = Label.new()
+	mode_state_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mode_state_label.add_theme_font_size_override("font_size", 12)
+	mode_state_label.add_theme_color_override("font_color", Color("8cddf0"))
+	mode_state_label.text = "PLANNING • 8.0s PULSE"
+	top_content.add_child(mode_state_label)
 	var playback_row = HBoxContainer.new()
 	playback_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	playback_row.add_theme_constant_override("separation", 10)
-	hint_box.add_child(playback_row)
-	execute_button = _button(playback_row, "EXECUTE ORDERS  ▶", _execute, 28)
+	playback_row.add_theme_constant_override("separation", 8)
+	top_content.add_child(playback_row)
+	execute_button = _button(playback_row, "EXECUTE", _on_primary_exec_pressed, 26)
 	var execute_style = StyleBoxFlat.new()
 	execute_style.bg_color = Color("285e55")
 	execute_style.set_corner_radius_all(4)
 	execute_button.add_theme_stylebox_override("normal", execute_style)
 	execute_button.add_theme_font_size_override("font_size", 12)
-	pause_button = _button(playback_row, "PAUSE", _toggle_playback_pause, 28)
-	pause_button.add_theme_font_size_override("font_size", 12)
-	controls.erase(pause_button)
+	execute_button.custom_minimum_size.x = 110
+	pause_button = Button.new() # backward compat
 	speed_choice = OptionButton.new()
 	for caption in ["¼x", "½x", "1x"]: speed_choice.add_item(caption)
 	speed_choice.select(1)
+	speed_choice.custom_minimum_size = Vector2(55, 26)
 	speed_choice.item_selected.connect(func(index): playback.speed = [0.25, 0.5, 1.0][index])
 	playback_row.add_child(speed_choice)
 	execution_progress = ProgressBar.new()
-	execution_progress.max_value = 5
+	execution_progress.max_value = 8.0
 	execution_progress.show_percentage = false
-	execution_progress.custom_minimum_size.y = 3
-	hint_box.add_child(execution_progress)
-	action_hint = _label(hint_box, "", 11)
-	action_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	execution_progress.custom_minimum_size.y = 2
+	top_content.add_child(execution_progress)
+	action_hint = Label.new()
+	action_hint.visible = false
+
 	var impact_box = _panel(root, 0.23, 0.10, 0.77, 0.90)
 	impact_panel = impact_box.get_parent().get_parent()
 	var impact_style = impact_panel.get_theme_stylebox("panel").duplicate()
@@ -757,13 +786,23 @@ func _build_ui() -> void:
 	controls.erase(retry)
 	controls.erase(impact_continue)
 	impact_panel.visible = false
-	var footer = _hud_bar(root, 0.24, 0.94, 0.76, 1.0)
-	event_log = _label(footer, "", 12)
+
+	# Event log toast above contextual action bar
+	event_log = Label.new()
+	event_log.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	event_log.anchor_left = 0.24
+	event_log.anchor_right = 0.69
+	event_log.anchor_top = 0.865
+	event_log.anchor_bottom = 0.905
 	event_log.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	event_log.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	event_log.add_theme_font_size_override("font_size", 11)
+	event_log.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95, 0.75))
+	tactical_ui.add_child(event_log)
 
 	# Radio Transmission Callout HUD Banner (Top Center)
 	var radio_panel = PanelContainer.new()
-	root.add_child(radio_panel)
+	tactical_ui.add_child(radio_panel)
 	radio_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	radio_panel.anchor_left = 0.28
 	radio_panel.anchor_right = 0.72
@@ -787,26 +826,63 @@ func _build_ui() -> void:
 	radio_panel.add_child(radio_callout_label)
 	radio_panel.visible = false
 
-	# Bottom-left persistent Tank Card
-	var tank_card_box = _hud_bar(root, 0.01, 0.88, 0.23, 0.99)
-	tank_card_label = _label(tank_card_box, "A-47 MASTODON • OPERATIONAL\nAMMO: 25/25 AP • SPEED: 0.0 m/s\nSYSTEMS STABLE", 11)
+	# 2. Bottom Left: Unit Status Card (Very Compact)
+	var tank_card_box = _hud_bar(tactical_ui, 0.01, 0.89, 0.22, 0.99)
+	tank_card_label = _label(tank_card_box, "A-47 MASTODON\nOperational\n92mm APCBC (Loaded) • 25 rnds", 11)
 	tank_card_label.add_theme_color_override("font_color", Color("8cddf0"))
 
-	# Bottom-right HUD Toolbar for quick drawer toggles
-	var toolbar_box = _hud_bar(root, 0.69, 0.94, 0.99, 1.0)
+	# 3. Bottom Center: Contextual Action Bar
+	var ctx_hud = _hud_bar(tactical_ui, 0.24, 0.91, 0.69, 0.99)
+	contextual_box = ctx_hud
+	var ctx_row = HBoxContainer.new()
+	ctx_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	ctx_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ctx_row.add_theme_constant_override("separation", 6)
+	ctx_hud.add_child(ctx_row)
+	contextual_buttons.clear()
+	for i in range(4):
+		var btn = _button(ctx_row, "", func(): pass, 26)
+		btn.add_theme_font_size_override("font_size", 11)
+		contextual_buttons.append(btn)
+	_update_contextual_bar()
+
+	# 4. Bottom Right: Quick Access Drawer Buttons
+	var toolbar_box = _hud_bar(tactical_ui, 0.71, 0.91, 0.99, 0.99)
 	var toolbar_row = HBoxContainer.new()
+	toolbar_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toolbar_row.add_theme_constant_override("separation", 5)
 	toolbar_box.add_child(toolbar_row)
-	gunner_sight_btn = _button(toolbar_row, "SIGHT [G]", _toggle_gunner_view, 24)
-	drawer_orders_btn = _button(toolbar_row, "ORDERS", func(): left_drawer.visible = not left_drawer.visible, 24)
 	drawer_crew_btn = _button(toolbar_row, "CREW", func():
-		right_drawer.visible = true
-		detail_tabs.current_tab = 2, 24)
+		if right_drawer.visible and detail_tabs.current_tab == 1:
+			right_drawer.visible = false
+		else:
+			right_drawer.visible = true
+			detail_tabs.current_tab = 1
+	, 26)
+	drawer_crew_btn.add_theme_font_size_override("font_size", 11)
+	
 	drawer_intel_btn = _button(toolbar_row, "INTEL", func():
-		right_drawer.visible = true
-		detail_tabs.current_tab = 0, 24)
+		if right_drawer.visible and detail_tabs.current_tab == 0:
+			right_drawer.visible = false
+		else:
+			right_drawer.visible = true
+			detail_tabs.current_tab = 0
+	, 26)
+	drawer_intel_btn.add_theme_font_size_override("font_size", 11)
+	
+	drawer_orders_btn = _button(toolbar_row, "ORDERS", func():
+		left_drawer.visible = not left_drawer.visible
+	, 26)
+	drawer_orders_btn.add_theme_font_size_override("font_size", 11)
+	
 	drawer_shots_btn = _button(toolbar_row, "SHOTS", func():
-		right_drawer.visible = true
-		detail_tabs.current_tab = 1, 24)
+		if right_drawer.visible and detail_tabs.current_tab == 2:
+			right_drawer.visible = false
+		else:
+			right_drawer.visible = true
+			detail_tabs.current_tab = 2
+	, 26)
+	drawer_shots_btn.add_theme_font_size_override("font_size", 11)
 
 func _can_edit_orders() -> bool:
 	return phase not in ["EXECUTION", "COMPLETE"] or (phase == "EXECUTION" and time_left > 0.0001 and playback.paused and not playback.busy())
@@ -905,10 +981,44 @@ func _rebuild_queue() -> void:
 		queue_widgets.append({"label": label, "limit": limit, "cancel": cancel})
 	_refresh_queue()
 
+func _format_action_intent(action: Dictionary, estimate: Dictionary, budget: float, idx: int) -> String:
+	var kind: String = action.get("kind", "")
+	var title = ""
+	match kind:
+		"move":
+			title = "Move to position"
+		"aim":
+			if player_track != null and player_track.has_contact():
+				title = "Slew turret toward Contact A"
+			else:
+				var offset = action.point - player.position
+				var bearing = fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360.0)
+				title = "Slew turret toward %03d°" % int(bearing)
+		"fire":
+			title = "Fire main gun at target"
+		"wait":
+			title = "Hold position"
+		"reload":
+			title = "Reload main gun"
+		"hull":
+			title = "Pivot hull"
+		"scan":
+			title = "Searchlight sweep"
+		_:
+			title = Actions.TITLES.get(kind, kind.capitalize())
+	
+	var sec_str = "%.1fs" % estimate.seconds if is_finite(estimate.seconds) else "blocked"
+	var res = "%d. %s (%s)" % [idx + 1, title, sec_str]
+	if estimate.end > budget:
+		res += "\n↳ continues next pulse"
+	elif idx == 0 and action_queue.running:
+		res += "\n↳ in progress (%.1fs spent)" % action.spent
+	return res
+
 func _refresh_queue() -> void:
 	if budget_label == null: return
 	queue_scroll.visible = not action_queue.actions.is_empty()
-	var budget = time_left if phase == "EXECUTION" else (timeline.pulse_duration if timeline else 5.0)
+	var budget = time_left if phase == "EXECUTION" else (timeline.pulse_duration if timeline else 8.0)
 	var estimates = action_queue.estimates(player)
 	var total: float = estimates.back().end if not estimates.is_empty() else 0.0
 	var committed = minf(total, budget)
@@ -918,17 +1028,13 @@ func _refresh_queue() -> void:
 	reload_label.text = "Gun Ready • %d rnds" % player.model.rounds if reload_time <= 0 else "Reload: %.1fs • %d rnds" % [reload_time, player.model.rounds]
 	if not player.model.can_fire(): reload_label.text = "Gun Unavailable"
 	if reload_time > 0 and player.orders.get("extinguish", false): reload_label.text += " (loader fighting fire)"
+	if drawer_orders_btn != null:
+		drawer_orders_btn.text = "ORDERS (%d)" % action_queue.actions.size() if not action_queue.actions.is_empty() else "ORDERS"
 	for i in range(mini(estimates.size(), queue_widgets.size())):
 		var estimate = estimates[i]
+		var action = action_queue.actions[i] if i < action_queue.actions.size() else {}
 		var row = queue_widgets[i]
-		var timing = "~%.2f s" % estimate.seconds if is_finite(estimate.seconds) else "blocked"
-		var crew_tag = ("[" + estimate.crew + "] ") if estimate.has("crew") and not estimate.crew.is_empty() else ""
-		var caption = "%d  %s%s · %s" % [i + 1, crew_tag, estimate.title, timing]
-		if not estimate.reason.is_empty(): caption += "\n" + estimate.reason
-		elif estimate.start >= budget: caption += "\nNext turn"
-		elif estimate.end > budget: caption += "\nContinues next turn"
-		elif i == 0 and action_queue.running: caption += "\nActive · %.2f s spent" % action_queue.actions[0].spent
-		row.label.text = caption
+		row.label.text = _format_action_intent(action, estimate, budget, i)
 		row.label.add_theme_color_override("font_color", Color("efc477") if estimate.end > budget else Color("8cddf0"))
 		row.cancel.disabled = not _can_edit_orders()
 		row.limit.editable = _can_edit_orders()
@@ -1007,6 +1113,82 @@ func _slew_to_contact_and_aim() -> void:
 		_callout("Commander", "TARGET DESIGNATED! Gunner, slew on bearing %03d°!" % int(player_track.estimated_bearing_deg))
 		_event("COMMANDER: Turret traverse commanded to estimated bearing %03d°." % int(player_track.estimated_bearing_deg))
 
+func _on_primary_exec_pressed() -> void:
+	if not playback.active.is_empty():
+		_continue_impact()
+	elif phase == "EXECUTION":
+		_toggle_playback_pause()
+	elif phase not in ["EXECUTION", "COMPLETE"]:
+		_execute()
+
+func _update_contextual_bar() -> void:
+	if contextual_buttons.size() < 4 or not is_instance_valid(player): return
+	
+	var is_visible = contact_is_visible()
+	var is_loaded = player.model.can_fire() and player.model.reload <= 0.05
+	var has_contact = player_track != null and player_track.has_contact()
+	
+	if is_visible and is_loaded:
+		# WHEN ENEMY VISIBLE & GUN LOADED:
+		# [ GUNNER SIGHT ] [ TRACK ] [ FIRE ] [ HOLD ]
+		contextual_buttons[0].text = "GUNNER SIGHT [G]"
+		contextual_buttons[0].tooltip_text = "Enter Gunner Periscope Sight to aim and fire."
+		_set_btn_action(contextual_buttons[0], _toggle_gunner_view)
+		
+		contextual_buttons[1].text = "TRACK"
+		contextual_buttons[1].tooltip_text = "Commander tracks target to refine solution."
+		_set_btn_action(contextual_buttons[1], _track_contact_order)
+		
+		contextual_buttons[2].text = "FIRE"
+		contextual_buttons[2].tooltip_text = "Queue direct fire at visible enemy."
+		_set_btn_action(contextual_buttons[2], _queue_contact_fire)
+		
+		contextual_buttons[3].text = "HOLD"
+		contextual_buttons[3].tooltip_text = "Hold current position and clear orders."
+		_set_btn_action(contextual_buttons[3], _clear_orders)
+	elif selected_contact or (has_contact and (input_mode == "contact" or not is_visible)):
+		# WHEN ENEMY CONTACT SELECTED:
+		# [ TRACK ] [ SLEW GUN ] [ GUNNER SIGHT ] [ FIRE PLAN ]
+		contextual_buttons[0].text = "TRACK"
+		contextual_buttons[0].tooltip_text = "Commander tracks contact to refine estimates."
+		_set_btn_action(contextual_buttons[0], _track_contact_order)
+		
+		contextual_buttons[1].text = "SLEW GUN [T]"
+		contextual_buttons[1].tooltip_text = "Slew turret toward Contact A estimate."
+		_set_btn_action(contextual_buttons[1], _slew_to_contact_and_aim)
+		
+		contextual_buttons[2].text = "GUNNER SIGHT [G]"
+		contextual_buttons[2].tooltip_text = "Enter Gunner Periscope Sight."
+		_set_btn_action(contextual_buttons[2], _toggle_gunner_view)
+		
+		contextual_buttons[3].text = "FIRE PLAN"
+		contextual_buttons[3].tooltip_text = "Queue speculative shot at estimated location."
+		_set_btn_action(contextual_buttons[3], _queue_contact_fire)
+	else:
+		# WHEN NOTHING SELECTED:
+		# [ MOVE ] [ OBSERVE ] [ GUNNER SIGHT ] [ HOLD ]
+		contextual_buttons[0].text = "MOVE [M]"
+		contextual_buttons[0].tooltip_text = "Click to set movement destination (or click ground directly)."
+		_set_btn_action(contextual_buttons[0], func(): _set_mode("move"))
+		
+		contextual_buttons[1].text = "OBSERVE"
+		contextual_buttons[1].tooltip_text = "Set Commander's observation sector."
+		_set_btn_action(contextual_buttons[1], _start_observe_sector_mode)
+		
+		contextual_buttons[2].text = "GUNNER SIGHT [G]"
+		contextual_buttons[2].tooltip_text = "Enter Gunner Periscope Sight."
+		_set_btn_action(contextual_buttons[2], _toggle_gunner_view)
+		
+		contextual_buttons[3].text = "HOLD"
+		contextual_buttons[3].tooltip_text = "Hold current position and clear movement."
+		_set_btn_action(contextual_buttons[3], _clear_orders)
+
+func _set_btn_action(btn: Button, callback: Callable) -> void:
+	var conns = btn.pressed.get_connections()
+	for c in conns:
+		btn.pressed.disconnect(c.callable)
+	btn.pressed.connect(callback)
+
 func _toggle_gunner_view() -> void:
 	if view_mode == "TACTICAL":
 		_enter_gunner_view()
@@ -1021,12 +1203,18 @@ func _enter_gunner_view() -> void:
 	if gunner_overlay != null:
 		gunner_overlay.set_systems(player.gunner_sight, player, player_track)
 		gunner_overlay.visible = true
+	if tactical_ui != null:
+		tactical_ui.visible = false
 	if battlefield_overlay != null:
 		battlefield_overlay.visible = false
+	if world_graphics != null:
+		world_graphics.visible = false
+	if ghost_tank != null:
+		ghost_tank.visible = false
 	if left_drawer != null: left_drawer.visible = false
 	if right_drawer != null: right_drawer.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	_callout("Gunner", "ON SIGHT! Aperture open at %dm." % int(player.gunner_sight.sight_range_m))
+	_callout("Gunner", "On sight.")
 
 func _exit_gunner_view() -> void:
 	if not is_instance_valid(player): return
@@ -1037,8 +1225,14 @@ func _exit_gunner_view() -> void:
 		camera.current = true
 	if gunner_overlay != null:
 		gunner_overlay.visible = false
+	if tactical_ui != null:
+		tactical_ui.visible = true
 	if battlefield_overlay != null:
 		battlefield_overlay.visible = true
+	if world_graphics != null:
+		world_graphics.visible = true
+	if ghost_tank != null and player_track != null and player_track.has_contact() and not enemy.visible:
+		ghost_tank.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _toggle_fire_policy() -> void:
@@ -1128,6 +1322,10 @@ func _aim_at(point: Vector3) -> void:
 	fields.bearing.value = fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360)
 	fields.range.value = Vector2(offset.x, offset.z).length()
 	updating_fields = false
+	if player != null and player.gunner_sight != null:
+		player.gunner_sight.sight_range_m = clampf(fields.range.value, GunnerSightSystem.MIN_SIGHT_RANGE, GunnerSightSystem.MAX_SIGHT_RANGE)
+		player.gunner_sight.commanded_yaw = -atan2(offset.x, -offset.z)
+		player.gunner_sight.commanded_pitch = 0.0
 
 func _execute() -> void:
 	if phase == "EXECUTION":
@@ -1162,6 +1360,10 @@ func _execute() -> void:
 		player.orders["extinguish"] = plan.extinguish
 		action_queue.start(player)
 	else:
+		if plan.has("aim_point") and player.gunner_sight != null:
+			var offset = plan.aim_point - player.position
+			player.gunner_sight.sight_range_m = clampf(Vector2(offset.x, offset.z).length(), GunnerSightSystem.MIN_SIGHT_RANGE, GunnerSightSystem.MAX_SIGHT_RANGE)
+			player.gunner_sight.commanded_yaw = -atan2(offset.x, -offset.z)
 		player.commit(plan)
 	input_mode = "select"
 	order_notice = ""
@@ -1796,43 +1998,42 @@ func _refresh_orders() -> void:
 	observe_button.set_pressed_no_signal(input_mode == "observe_sector")
 	track_contact_button.disabled = display_contact.is_empty()
 	
-	var p_dur = timeline.pulse_duration if timeline else 5.0
-	execution_progress.max_value = p_dur
-	execution_progress.value = p_dur - time_left if phase == "EXECUTION" else 0
+	var p_dur = timeline.pulse_duration if timeline else 8.0
 	if phase == "EXECUTION":
-		action_hint.add_theme_color_override("font_color", Color(1.0, 0.82, 0.28))
+		execution_progress.visible = true
+		execution_progress.max_value = p_dur
+		execution_progress.value = p_dur - time_left
 		if not playback.active.is_empty():
-			action_hint.text = "IMPACT REPLAY: " + _shot_title(playback.active)
+			if mode_state_label != null:
+				mode_state_label.text = "IMPACT REPLAY"
+				mode_state_label.add_theme_color_override("font_color", Color("ffdb87"))
+			execute_button.text = "CONTINUE ▶"
+			execute_button.disabled = false
 		elif playback.paused:
-			action_hint.text = "PAUSED (%.1fs left)" % time_left
-		elif playback.shot_focus > 0:
-			action_hint.text = "SLOW-MOTION REPLAY"
+			if mode_state_label != null:
+				mode_state_label.text = "PAUSED • %.1fs REMAINING" % time_left
+				mode_state_label.add_theme_color_override("font_color", Color("efc477"))
+			execute_button.text = "RESUME"
+			execute_button.disabled = false
 		else:
-			action_hint.text = "EXECUTING: %.1f → 0.0 SEC (PULSE IN PROGRESS)" % time_left
-		execute_button.text = "RESUME ▶ (%.1fs)" % time_left if _can_edit_orders() else "RUNNING (%.1fs)" % time_left
-		execute_button.disabled = not _can_edit_orders()
+			if mode_state_label != null:
+				mode_state_label.text = "EXECUTING ORDERS..."
+				mode_state_label.add_theme_color_override("font_color", Color("8cddf0"))
+			execute_button.text = "PAUSE"
+			execute_button.disabled = false
 	elif phase == "COMPLETE":
-		action_hint.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
-		action_hint.text = phase_report
-		execute_button.text = "ENGAGEMENT COMPLETE"
-	elif input_mode == "move":
-		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
-		action_hint.text = order_notice if not order_notice.is_empty() else "Click ground to set move destination"
-	elif input_mode in ["aim", "hull"]:
-		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
-		action_hint.text = "Click direction to orient " + ("turret" if input_mode == "aim" else "hull")
-	elif input_mode == "observe_sector":
-		action_hint.add_theme_color_override("font_color", Color(0.45, 0.95, 0.65))
-		action_hint.text = "Click battlefield to orient Commander observation sector"
-	elif input_mode == "fire":
-		action_hint.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35))
-		action_hint.text = "Press [G] to enter Gunner Sight"
+		execution_progress.visible = false
+		if mode_state_label != null:
+			mode_state_label.text = "ENGAGEMENT COMPLETE"
+		execute_button.text = "COMPLETE"
+		execute_button.disabled = true
 	else:
-		action_hint.add_theme_color_override("font_color", Color(0.45, 0.85, 0.95))
-		action_hint.text = order_notice if not order_notice.is_empty() else (phase_report if phase == "ASSESSMENT" else "PLANNING — Left-click ground to MOVE • [G] for Gunner Sight • Right-click to UNDO")
-	if phase not in ["EXECUTION", "COMPLETE"]:
-		var has_orders = travel_target != null or fields.fire.button_pressed or fields.light.button_pressed or fields.move.value != 0 or fields.pivot.value != 0 or not action_queue.actions.is_empty()
-		execute_button.text = "EXECUTE ORDERS  ▶" if has_orders else "EXECUTE / WAIT %.0fs" % p_dur
+		execution_progress.visible = false
+		if mode_state_label != null:
+			mode_state_label.text = "PLANNING • %.1fs PULSE" % p_dur
+			mode_state_label.add_theme_color_override("font_color", Color("8cddf0"))
+		execute_button.text = "EXECUTE"
+		execute_button.disabled = false
 		movement_button.disabled = not player.model.can_move()
 		contact_fire_button.disabled = not player.model.can_fire() or display_contact.is_empty()
 		scan_button.disabled = false
@@ -1863,13 +2064,30 @@ func _process(delta: float) -> void:
 			crew_label.text += "\n\nTACTICAL OBSERVERS\n" + "\n".join(obs_lines)
 
 	if tank_card_label != null:
-		tank_card_label.text = "A-47 MASTODON • %s\nAMMO: %d/%d • SPEED: %.1fm/s\n%s" % [
-			player.model.status().to_upper(),
-			player.model.rounds,
-			25 if (ammo_choice == null or ammo_choice.selected == 0) else 40,
-			player.speed,
-			"LOADER EXTINGUISHING" if player.orders.get("extinguish", false) else "SYSTEMS STABLE"
+		var status_str = "Operational"
+		if player.model.catastrophic or player.model.status() == "Catastrophic loss":
+			status_str = "Destroyed"
+		elif not player.model.can_move():
+			status_str = "Immobilized"
+		elif player.model.status() != "Combat effective":
+			status_str = "Damaged"
+
+		var reload_time = Actions.reload_seconds(player)
+		var ammo_str = ""
+		if not player.model.can_fire():
+			ammo_str = "Main Gun Disabled"
+		elif reload_time <= 0.05:
+			ammo_str = "92mm APCBC (Loaded)"
+		else:
+			ammo_str = "Reloading (%.1fs)" % reload_time
+
+		tank_card_label.text = "A-47 MASTODON\n%s\n%s • %d rnds" % [
+			status_str,
+			ammo_str,
+			player.model.rounds
 		]
+
+	_update_contextual_bar()
 
 	var visible_contact = contact_is_visible()
 	if view_mode == "GUNNER":
@@ -2041,6 +2259,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				cam_target += Vector3(cos(cam_yaw), 0, -sin(cam_yaw)) * pan_speed
 		elif event.keycode == KEY_ESCAPE:
 			input_mode = "select"
+			selected_contact = false
 			order_notice = "Target selection cancelled. Existing orders are unchanged."
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -2052,6 +2271,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				is_orbiting = false
 				if not right_click_dragged and _can_edit_orders():
+					selected_contact = false
 					if input_mode != "select":
 						input_mode = "select"
 						order_notice = "Target selection cancelled."
@@ -2073,22 +2293,35 @@ func _unhandled_input(event: InputEvent) -> void:
 				cam_pitch = lerpf(cam_pitch, natural_pitch, 0.6)
 				zoom = clampf(zoom + 8.0, 35.0, 200.0)
 			elif event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
-				var ray = camera.project_ray_origin(event.position)
-				var direction = camera.project_ray_normal(event.position)
-				var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
-				if hit != null:
-					if input_mode == "move": _queue_move(hit)
-					elif input_mode in ["aim", "hull"]:
-						var kind = input_mode
-						if kind == "aim": _aim_at(hit)
-						_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
-						input_mode = "select"
-					elif input_mode == "observe_sector":
-						_set_commander_sector_at(hit)
-						input_mode = "select"
-					else:
-						# Default / nothing selected: auto-assume player is trying to move tank there
-						_queue_move(hit)
+				var clicked_contact = false
+				if input_mode == "select" and player_track != null and player_track.has_contact() and camera != null:
+					var c_pos = player_track.estimated_position
+					if not camera.is_position_behind(c_pos):
+						var c_scr = camera.unproject_position(c_pos)
+						if event.position.distance_to(c_scr) < 42.0:
+							selected_contact = true
+							clicked_contact = true
+							_update_contextual_bar()
+				if not clicked_contact:
+					selected_contact = false
+					var ray = camera.project_ray_origin(event.position)
+					var direction = camera.project_ray_normal(event.position)
+					var hit = Plane(Vector3.UP, 0).intersects_ray(ray, direction)
+					if hit != null:
+						if input_mode == "move": _queue_move(hit)
+						elif input_mode in ["aim", "hull"]:
+							var kind = input_mode
+							if kind == "aim": _aim_at(hit)
+							_append_action(kind, Vector3(hit.x, fields.height.value, hit.z) if kind == "aim" else hit)
+							input_mode = "select"
+						elif input_mode == "observe_sector":
+							_set_commander_sector_at(hit)
+							input_mode = "select"
+						elif input_mode == "fire":
+							_queue_fire(hit)
+						else:
+							# Default / nothing selected: auto-assume player is trying to move tank there
+							_queue_move(hit)
 	elif event is InputEventMouseMotion and is_orbiting:
 		var delta_mouse = event.position - last_mouse_pos
 		last_mouse_pos = event.position

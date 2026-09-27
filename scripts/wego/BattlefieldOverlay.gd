@@ -183,33 +183,30 @@ func _draw() -> void:
 				draw_string(font, middle + Vector2(-4, 5), "!" if confirmed else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, tint)
 				
 				var label_lines: Array[String] = []
-				if confirmed:
-					label_lines.append("CONTACT A • SIGHTED")
-				elif track.has_silhouette:
-					label_lines.append("CONTACT A • LAST KNOWN")
-				else:
-					label_lines.append("CONTACT A • ESTIMATE")
-					
-				var hdg_deg = int(track.estimated_heading_deg)
-				var arrow_str = "↑ N"
-				if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
-				elif hdg_deg < 68: arrow_str = "↗ NE"
-				elif hdg_deg < 113: arrow_str = "→ E"
-				elif hdg_deg < 158: arrow_str = "↘ SE"
-				elif hdg_deg < 203: arrow_str = "↓ S"
-				elif hdg_deg < 248: arrow_str = "↙ SW"
-				elif hdg_deg < 293: arrow_str = "← W"
-				else: arrow_str = "↖ NW"
-				
+				label_lines.append("CONTACT A")
+				var contact_class = "Tank" if (track.identification_confidence >= 0.35 or track.has_visual_los or track.has_silhouette) else "Unknown"
+				label_lines.append(contact_class)
+				label_lines.append("~%s m" % [String.num(round(track.estimated_range / 50.0) * 50.0, 0)])
 				if track.estimated_speed_mps > 0.3:
-					label_lines.append("HEADING: %s (%.0f km/h)" % [arrow_str, track.estimated_speed_mps * 3.6])
+					var hdg_deg = int(track.estimated_heading_deg)
+					var arrow_str = "↑ N"
+					if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
+					elif hdg_deg < 68: arrow_str = "↗ NE"
+					elif hdg_deg < 113: arrow_str = "→ E"
+					elif hdg_deg < 158: arrow_str = "↘ SE"
+					elif hdg_deg < 203: arrow_str = "↓ S"
+					elif hdg_deg < 248: arrow_str = "↙ SW"
+					elif hdg_deg < 293: arrow_str = "← W"
+					else: arrow_str = "↖ NW"
+					label_lines.append("Moving %s" % arrow_str)
 				else:
-					label_lines.append("STATIONARY")
-					
-				label_lines.append("%.0f m ±%.0f m" % [track.estimated_range, track.range_uncertainty])
-				var conf_pct = int(track.identification_confidence * 100)
-				var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
-				label_lines.append("CONFIDENCE: %d%% · %s" % [conf_pct, sol_str])
+					label_lines.append("Stationary")
+				
+				# In F3 debug mode only: append exact technical metrics
+				if game.debug_overlay_enabled:
+					var conf_pct = int(track.identification_confidence * 100)
+					var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
+					label_lines.append("±%.0fm • CONF: %d%% · %s" % [track.range_uncertainty, conf_pct, sol_str])
 				
 				_tag(middle + Vector2(0, -32), "\n".join(label_lines), tint)
 
@@ -374,11 +371,17 @@ func _draw_crew_fov_overlay() -> void:
 	if cam != null and cam.is_position_behind(tank_pos): return
 	if not ("observers" in tank) or tank.observers.is_empty(): return
 	
+	var is_editing_sector = ("input_mode" in game and game.input_mode == "observe_sector")
+	var is_debug = game.debug_overlay_enabled if ("debug_overlay_enabled" in game) else false
+	
+	# Normal gameplay hides overlapping sensor cones to keep the 3D battlefield clear
+	if not is_debug and not is_editing_sector:
+		return
+	
 	var center_scr = screen(tank_pos)
 	
-	# Restrained, bounded observation sectors
-	# Order: Driver (10m) -> Loader (8.5m) -> Gunner (16m) -> Commander (22m, most prominent)
-	var ordered_roles = ["Driver", "Loader", "Gunner", "Commander"]
+	# In normal editing mode, only show Commander's active sector; debug shows all crew cones
+	var ordered_roles = ["Commander"] if not is_debug else ["Driver", "Loader", "Gunner", "Commander"]
 	for r_name in ordered_roles:
 		var obs = tank.observers.get(r_name, null)
 		if obs == null or not obs.is_active: continue
@@ -430,6 +433,8 @@ func _draw_crew_fov_overlay() -> void:
 			draw_dashed_line(center_scr, arc_pts[arc_pts.size() - 1], Color(border_color, 0.4), 1.0, 4.0, true)
 			var mid_idx = steps / 2
 			draw_line(center_scr, arc_pts[mid_idx], border_color, 1.2, true)
+			if is_editing_sector and obs.role == 0:
+				_tag(arc_pts[mid_idx] + Vector2(0, -28), "COMMANDER OBSERVING (%.0f°)" % obs.horizontal_fov_deg, border_color)
 
 func _draw_debug_crew_observers() -> void:
 	if game == null or not is_instance_valid(game.player) or not ("observers" in game.player): return

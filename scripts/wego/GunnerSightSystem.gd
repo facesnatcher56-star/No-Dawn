@@ -78,17 +78,27 @@ var optic_fov_deg: float = 10.5 # Magnified narrow gunner field of view
 func _init(p_vehicle = null) -> void:
 	vehicle = p_vehicle
 	if vehicle != null:
-		commanded_yaw = vehicle.rotation.y
+		var cur_yaw = vehicle.rotation.y + (vehicle.model.turret_yaw if ("model" in vehicle and vehicle.model != null) else 0.0)
+		commanded_yaw = cur_yaw
 		commanded_pitch = 0.0
-		current_bore_yaw = vehicle.rotation.y
+		current_bore_yaw = cur_yaw
 		current_bore_pitch = 0.0
 		_setup_camera()
+
+func sync_with_vehicle() -> void:
+	if vehicle != null:
+		var cur_yaw = vehicle.rotation.y + (vehicle.model.turret_yaw if ("model" in vehicle and vehicle.model != null) else 0.0)
+		current_bore_yaw = cur_yaw
+		commanded_yaw = cur_yaw
+		current_bore_pitch = 0.0
+		commanded_pitch = 0.0
+		_update_camera_transform()
 
 func _setup_camera() -> void:
 	sight_camera = Camera3D.new()
 	sight_camera.name = "GunnerSightCamera"
 	sight_camera.fov = optic_fov_deg
-	sight_camera.near = 0.5
+	sight_camera.near = 0.1
 	sight_camera.far = 4500.0
 	sight_camera.current = false
 	if vehicle != null:
@@ -96,16 +106,30 @@ func _setup_camera() -> void:
 		_update_camera_transform()
 
 func _update_camera_transform() -> void:
-	if sight_camera == null or vehicle == null or not vehicle.is_inside_tree(): return
-	# Gunner sight optic aperture position relative to vehicle hull/turret:
-	# Located on the left cheek of the turret mantlet
-	var turret_rot = vehicle.rotation.y + vehicle.model.turret_yaw
-	var local_optic_offset = Vector3(-0.62, 2.70, -1.25) # World-height offset on turret
-	var quat = Quaternion.from_euler(Vector3(0.0, turret_rot, 0.0))
-	sight_camera.global_position = vehicle.position + quat * local_optic_offset
+	if sight_camera == null or vehicle == null: return
 	
-	# The camera look direction is strictly tied to the ACTUAL current physical gunner optic / turret orientation!
-	# The player cannot freely rotate the camera during frozen planning time.
+	# Check for dedicated MKR_GunnerOptic on visual model
+	var optic_mkr: Node3D = vehicle.get_gunner_optic_marker() if vehicle.has_method("get_gunner_optic_marker") else null
+	if optic_mkr != null and optic_mkr.is_inside_tree():
+		if sight_camera.get_parent() != optic_mkr:
+			if sight_camera.get_parent() != null:
+				sight_camera.get_parent().remove_child(sight_camera)
+			optic_mkr.add_child(sight_camera)
+		sight_camera.position = Vector3.ZERO
+		var ammo = vehicle.get_active_ammo() if vehicle != null else null
+		var ballistic_elev = get_ballistic_elevation(sight_range_m, ammo)
+		# Camera looks along -Z (barrel axis); ballistic superelevation depresses sight line relative to bore
+		sight_camera.rotation = Vector3(-ballistic_elev, 0.0, 0.0)
+		return
+	
+	# Fallback mathematical positioning when no visual model is present (e.g. headless tests)
+	if not vehicle.is_inside_tree(): return
+	var turret_yaw = vehicle.model.turret_yaw if ("model" in vehicle and vehicle.model != null) else 0.0
+	var turret_rot = vehicle.rotation.y + turret_yaw
+	var local_optic_offset = Vector3(0.32, 2.45, -1.90)
+	var quat = Quaternion.from_euler(Vector3(0.0, turret_rot, 0.0))
+	sight_camera.global_position = vehicle.global_position + quat * local_optic_offset
+	
 	var ammo = vehicle.get_active_ammo() if vehicle != null else null
 	var ballistic_elev = get_ballistic_elevation(sight_range_m, ammo)
 	var optic_pitch = current_bore_pitch - ballistic_elev
@@ -135,9 +159,9 @@ func get_ballistic_elevation(range_m: float = -1.0, ammo: AmmunitionData = null)
 	
 	# Aerodynamic time of flight integration
 	var t_flight = (exp(k * r) - 1.0) / maxf(0.001, (k * v0))
-	var drop = 0.5 * g * t_flight * t_flight
 	# Superelevation angle in radians to cancel gravity drop at dialled range
-	return atan2(drop, maxf(1.0, r))
+	var sin_elev = clampf((0.5 * g * t_flight) / maxf(1.0, v0), -0.99, 0.99)
+	return asin(sin_elev)
 
 # Computes estimated deflection/lead in milliradians using ONLY estimated track data (no truth leaking!)
 func get_estimated_lead_mils(track: ContactTrack, ammo: AmmunitionData = null) -> float:

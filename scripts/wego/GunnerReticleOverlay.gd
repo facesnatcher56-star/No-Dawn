@@ -68,75 +68,67 @@ func _draw() -> void:
 	
 	var viewport_size = get_viewport_rect().size
 	var center = viewport_size * 0.5
-	var ap_rect = Rect2(center.x - APERTURE_WIDTH * 0.5, center.y - APERTURE_HEIGHT * 0.5, APERTURE_WIDTH, APERTURE_HEIGHT)
 	
-	# 1. Outer Cast-Metal Telescope Housing Mask
-	_draw_telescope_housing(viewport_size, ap_rect)
+	# 1. Outer Peripheral Vignette & Lens Rim (Full screen, transparent center)
+	_draw_telescope_housing(viewport_size)
 	
-	# 2. Subtle Coated Optical Glass Filter
-	_draw_optical_glass(ap_rect)
-	
-	# 3. Main A-47 Etched Reticle
+	# 2. Main A-47 Etched Reticle
 	_draw_etched_reticle(center)
 	
-	# 4. Horizontal Mil Lead Scale
+	# 3. Horizontal Mil Lead Scale
 	_draw_mil_lead_scale(center)
 	
-	# 5. Vertical Ballistic Range Markings (92mm APCBC)
+	# 4. Vertical Ballistic Range Markings (92mm APCBC)
 	_draw_vertical_ballistic_scale(center)
 	
-	# 6. Commanded Aim Lay Point (when laying gun)
+	# 5. Commanded Aim Lay Point (when laying gun)
 	_draw_commanded_lay_indicator(center)
 	
-	# 7. Mechanical Range Drum & Breech Instruments
-	_draw_mechanical_instruments(ap_rect, center)
+	# 6. Mechanical Range Drum & Breech Instruments
+	_draw_mechanical_instruments(viewport_size, center)
 	
-	# 8. Crew Intercom / Callout Banner
-	_draw_crew_callout(center, ap_rect)
+	# 7. Crew Intercom / Callout Banner
+	_draw_crew_callout(center, viewport_size)
 	
-	# 9. F3 Debug Telemetry (strictly hidden in normal play)
+	# 8. F3 Debug Telemetry (strictly hidden in normal play)
 	if debug_mode:
-		_draw_debug_telemetry(ap_rect)
+		_draw_debug_telemetry(viewport_size)
 
-func _draw_telescope_housing(vp_size: Vector2, ap: Rect2) -> void:
-	# Outer border rects surrounding the telescope aperture
-	draw_rect(Rect2(0, 0, ap.position.x, vp_size.y), housing_color)
-	draw_rect(Rect2(ap.end.x, 0, vp_size.x - ap.end.x, vp_size.y), housing_color)
-	draw_rect(Rect2(ap.position.x, 0, ap.size.x, ap.position.y), housing_color)
-	draw_rect(Rect2(ap.position.x, ap.end.y, ap.size.x, vp_size.y - ap.end.y), housing_color)
+func _draw_telescope_housing(vp_size: Vector2) -> void:
+	# Full-screen subtle peripheral vignetting around extreme outer edges
+	# Keeps 90%+ of the screen clear and completely open to the 3D battlefield
+	var rim_color = Color(0.18, 0.20, 0.22, 0.85)
+	var edge_shade = Color(0.02, 0.03, 0.04, 0.75)
 	
-	# Heavy cast-metal rim border
-	var rim_color = Color(0.22, 0.24, 0.26, 0.95)
-	draw_rect(ap, rim_color, false, 3.0)
-	var inner_rim = Rect2(ap.position + Vector2(2, 2), ap.size - Vector2(4, 4))
-	draw_rect(inner_rim, Color(0.12, 0.13, 0.14, 0.8), false, 1.5)
+	# Subtle edge masking strips (16px)
+	draw_rect(Rect2(0, 0, vp_size.x, 16), edge_shade)
+	draw_rect(Rect2(0, vp_size.y - 16, vp_size.x, 16), edge_shade)
+	draw_rect(Rect2(0, 0, 16, vp_size.y), edge_shade)
+	draw_rect(Rect2(vp_size.x - 16, 0, 16, vp_size.y), edge_shade)
 	
-	# Corner metal gussets / rivets
-	var rivet_col = Color(0.35, 0.38, 0.40, 0.85)
-	var rivet_offsets = [
-		Vector2(12, 12), Vector2(ap.size.x - 12, 12),
-		Vector2(12, ap.size.y - 12), Vector2(ap.size.x - 12, ap.size.y - 12)
-	]
-	for ro in rivet_offsets:
-		draw_circle(ap.position + ro, 3.5, rivet_col)
-		draw_circle(ap.position + ro, 1.5, Color(0.08, 0.08, 0.08, 0.9))
+	# Clean inner rim border
+	var rim_rect = Rect2(16, 16, vp_size.x - 32, vp_size.y - 32)
+	draw_rect(rim_rect, rim_color, false, 2.0)
+	
+	# Corner lens rounding gussets
+	var corner_w = 42.0
+	draw_rect(Rect2(16, 16, corner_w, 4), edge_shade)
+	draw_rect(Rect2(16, 16, 4, corner_w), edge_shade)
+	draw_rect(Rect2(vp_size.x - 16 - corner_w, 16, corner_w, 4), edge_shade)
+	draw_rect(Rect2(vp_size.x - 20, 16, 4, corner_w), edge_shade)
+	draw_rect(Rect2(16, vp_size.y - 20, corner_w, 4), edge_shade)
+	draw_rect(Rect2(16, vp_size.y - 16 - corner_w, 4, corner_w), edge_shade)
+	draw_rect(Rect2(vp_size.x - 16 - corner_w, vp_size.y - 20, corner_w, 4), edge_shade)
+	draw_rect(Rect2(vp_size.x - 20, vp_size.y - 16 - corner_w, 4, corner_w), edge_shade)
 
-func _draw_optical_glass(ap: Rect2) -> void:
-	# Subtle warm anti-reflective coating tint
-	draw_rect(ap, glass_tint)
-	
-	# Subtle corner lens vignetting
-	var vignette_col = Color(0.0, 0.0, 0.0, 0.15)
-	var corner_sz = 35.0
-	draw_rect(Rect2(ap.position, Vector2(corner_sz, corner_sz)), vignette_col)
-	draw_rect(Rect2(Vector2(ap.end.x - corner_sz, ap.position.y), Vector2(corner_sz, corner_sz)), vignette_col)
-	draw_rect(Rect2(Vector2(ap.position.x, ap.end.y - corner_sz), Vector2(corner_sz, corner_sz)), vignette_col)
-	draw_rect(Rect2(ap.end - Vector2(corner_sz, corner_sz), Vector2(corner_sz, corner_sz)), vignette_col)
+func _draw_optical_glass(_vp_size: Vector2) -> void:
+	# Omitted in normal mode for maximum clarity through optics
+	pass
 
 func _draw_etched_reticle(center: Vector2) -> void:
 	# Central Aiming Chevron (Primary Point of Aim)
-	var chev_w = 8.0
-	var chev_h = 7.0
+	var chev_w = 7.0
+	var chev_h = 6.0
 	var tip = center
 	var left_pt = center + Vector2(-chev_w, chev_h)
 	var right_pt = center + Vector2(chev_w, chev_h)
@@ -233,77 +225,69 @@ func _draw_commanded_lay_indicator(center: Vector2) -> void:
 		var y_offset = pitch_diff * 1000.0 * (MILS_TO_PIXELS * 0.058)
 		var lay_pos = center + Vector2(x_offset, y_offset)
 		
-		# Only draw if within telescope aperture
-		var ap_half_w = APERTURE_WIDTH * 0.48
-		var ap_half_h = APERTURE_HEIGHT * 0.48
-		if absf(x_offset) < ap_half_w and absf(y_offset) < ap_half_h:
-			var lay_col = Color(0.4, 0.85, 0.55, 0.75) if sight_system.is_bore_aligned() else Color(0.95, 0.75, 0.35, 0.8)
-			# Small dashed commanded lay circle
-			draw_arc(lay_pos, 5.0, 0, TAU, 16, lay_col, 1.2, true)
-			draw_line(lay_pos + Vector2(-3, 0), lay_pos + Vector2(3, 0), lay_col, 1.0, true)
-			draw_line(lay_pos + Vector2(0, -3), lay_pos + Vector2(0, 3), lay_col, 1.0, true)
+		var lay_col = Color(0.4, 0.85, 0.55, 0.75) if sight_system.is_bore_aligned() else Color(0.95, 0.75, 0.35, 0.8)
+		# Small dashed commanded lay circle
+		draw_arc(lay_pos, 5.0, 0, TAU, 16, lay_col, 1.2, true)
+		draw_line(lay_pos + Vector2(-3, 0), lay_pos + Vector2(3, 0), lay_col, 1.0, true)
+		draw_line(lay_pos + Vector2(0, -3), lay_pos + Vector2(0, 3), lay_col, 1.0, true)
 
-func _draw_mechanical_instruments(ap: Rect2, center: Vector2) -> void:
+func _draw_mechanical_instruments(vp_size: Vector2, center: Vector2) -> void:
 	var font = ThemeDB.fallback_font
 	
 	# --- Top Plate Stamping ---
-	var top_y = ap.position.y - 12
-	draw_string(font, Vector2(ap.position.x + 10, top_y), "TELESCOPE No. 47 Mk. II", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.65, 0.68, 0.72))
-	draw_string(font, Vector2(ap.end.x - 170, top_y), "92mm CANNON M3A1", HORIZONTAL_ALIGNMENT_RIGHT, -1, 11, Color(0.65, 0.68, 0.72))
+	draw_string(font, Vector2(32, 32), "TELESCOPE No. 47 Mk. II", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.68, 0.72, 0.65))
+	draw_string(font, Vector2(vp_size.x - 170, 32), "92mm CANNON M3A1", HORIZONTAL_ALIGNMENT_RIGHT, -1, 10, Color(0.65, 0.68, 0.72, 0.65))
 	
 	# --- Bottom Left: Gun Breech & Ammunition Status ---
 	var ammo_name = player_vehicle.get_active_ammo().name.to_upper() if (player_vehicle != null and player_vehicle.get_active_ammo() != null) else "92MM APCBC"
 	var reload_left = player_vehicle.model.reload if player_vehicle != null else 0.0
 	var is_loaded = reload_left <= 0.05
 	
-	var breech_box = Rect2(ap.position.x + 16, ap.end.y - 48, 180, 32)
+	var breech_box = Rect2(32, vp_size.y - 56, 172, 34)
 	draw_rect(breech_box, drum_bg)
-	draw_rect(breech_box, Color(0.28, 0.30, 0.32), false, 1.2)
+	draw_rect(breech_box, Color(0.28, 0.30, 0.32, 0.8), false, 1.2)
 	
-	var breech_status = "BREECH: LOADED" if is_loaded else ("RAMMING (%.1fs)" % reload_left)
+	var breech_status = "LOADED" if is_loaded else ("RAMMING (%.1fs)" % reload_left)
 	var status_col = Color(0.3, 0.9, 0.5) if is_loaded else Color(0.95, 0.65, 0.25)
 	draw_string(font, Vector2(breech_box.position.x + 8, breech_box.position.y + 14), ammo_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.7, 0.75, 0.8))
-	draw_string(font, Vector2(breech_box.position.x + 8, breech_box.position.y + 26), breech_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, status_col)
+	draw_string(font, Vector2(breech_box.position.x + 8, breech_box.position.y + 27), breech_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, status_col)
 	
 	# --- Bottom Right: Mechanical Range Drum Instrument ---
-	# Authentic WWII rotary range drum counter window: APCBC [ 0850 ]
-	var drum_box = Rect2(ap.end.x - 224, ap.end.y - 48, 208, 32)
+	var drum_box = Rect2(vp_size.x - 204, vp_size.y - 56, 172, 34)
 	draw_rect(drum_box, drum_bg)
-	draw_rect(drum_box, Color(0.28, 0.30, 0.32), false, 1.2)
+	draw_rect(drum_box, Color(0.28, 0.30, 0.32, 0.8), false, 1.2)
 	
-	# Stamped caliber header
 	draw_string(font, Vector2(drum_box.position.x + 8, drum_box.position.y + 14), "RANGE DRUM [WHEEL]", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.7, 0.75, 0.8))
-	
-	# Number drum window showing meters
 	var range_val = int(round(sight_system.sight_range_m))
 	var range_str = "%04d m" % range_val
-	var drum_wheel_rect = Rect2(drum_box.position.x + 120, drum_box.position.y + 5, 80, 22)
+	var drum_wheel_rect = Rect2(drum_box.position.x + 88, drum_box.position.y + 6, 76, 22)
 	draw_rect(drum_wheel_rect, Color(0.04, 0.05, 0.05))
 	draw_rect(drum_wheel_rect, Color(0.4, 0.42, 0.45), false, 1.0)
 	draw_string(font, Vector2(drum_wheel_rect.position.x + 8, drum_wheel_rect.position.y + 16), range_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, reticle_color)
 	
-	# --- Bottom Center Hint ---
-	var hint_txt = "[ESC/G] MAP  •  [WHEEL] RANGE ±100M (SHIFT: ±25M)  •  [SPACE/CLICK] FIRE"
-	draw_string(font, Vector2(center.x - 240, ap.end.y + 22), hint_txt, HORIZONTAL_ALIGNMENT_CENTER, 480, 10, Color(0.55, 0.60, 0.65))
+	# --- Settling Indicator (subtle, only when settling) ---
+	if sight_system.settling_state != GunnerSightSystem.SettlingState.STABLE:
+		var settle_col = Color(0.95, 0.75, 0.35, 0.85)
+		draw_string(font, Vector2(center.x - 60, vp_size.y - 38), "GUN SETTLING", HORIZONTAL_ALIGNMENT_CENTER, 120, 11, settle_col)
 
-func _draw_crew_callout(center: Vector2, ap: Rect2) -> void:
+func _draw_crew_callout(center: Vector2, vp_size: Vector2) -> void:
 	if active_callout.is_empty() or callout_timer <= 0.0: return
 	var font = ThemeDB.fallback_font
 	
-	var callout_box = Rect2(center.x - 230, ap.position.y + 18, 460, 36)
+	var callout_box = Rect2(center.x - 220, 20, 440, 32)
 	var alpha = clampf(callout_timer * 1.5, 0.0, 1.0)
 	var bg_col = Color(0.08, 0.10, 0.12, 0.92 * alpha)
 	var border_col = Color(0.85, 0.75, 0.35, 0.85 * alpha)
 	
 	draw_rect(callout_box, bg_col)
-	draw_rect(callout_box, border_col, false, 1.5)
+	draw_rect(callout_box, border_col, false, 1.2)
 	
 	var full_text = "%s: \"%s\"" % [callout_speaker.to_upper(), active_callout]
-	draw_string(font, Vector2(callout_box.position.x + 10, callout_box.position.y + 23), full_text, HORIZONTAL_ALIGNMENT_CENTER, 440, 13, Color(callout_col.r, callout_col.g, callout_col.b, alpha))
+	draw_string(font, Vector2(callout_box.position.x + 10, callout_box.position.y + 21), full_text, HORIZONTAL_ALIGNMENT_CENTER, 420, 12, Color(callout_col.r, callout_col.g, callout_col.b, alpha))
 
-func _draw_debug_telemetry(ap: Rect2) -> void:
+func _draw_debug_telemetry(vp_size: Vector2) -> void:
 	var font = ThemeDB.fallback_font
-	var deb_box = Rect2(ap.position.x + 16, ap.position.y + 16, 260, 140)
+	var deb_box = Rect2(32, 60, 260, 140)
 	draw_rect(deb_box, Color(0.05, 0.06, 0.08, 0.90))
 	draw_rect(deb_box, Color(0.3, 0.6, 0.8), false, 1.0)
 	
