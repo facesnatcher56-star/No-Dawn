@@ -83,10 +83,10 @@ var steps: Array = [
 	{
 		"id": "contact",
 		"badge": "STEP 5 OF 8 • TARGET ACQUISITION",
-		"title": "ENEMY DETECTED: CONTACT A",
-		"text": "Target spotted ~1,500m down the road! Note estimated range and dynamic contact commands below.",
+		"title": "INVESTIGATE AND DEVELOP CONTACTS",
+		"text": "A cue gives a rough bearing. Observe that sector for several pulses to locate and classify it.",
 		"objective": "Review contact report (or wait for pulse to complete)",
-		"hint": "Contact detected ~1,500m down the road.",
+		"hint": "Narrow observation improves detail; broad observation covers more ground.",
 		"target_tag": "contact_label"
 	},
 	{
@@ -102,8 +102,8 @@ var steps: Array = [
 		"id": "range_drum",
 		"badge": "STEP 7 OF 8 • RANGE & LAYING",
 		"title": "CALIBRATE RANGE DRUM & AIM",
-		"text": "Use [Wheel] or [ [ ] / [ ] ] to dial range drum to ~1500m. Superelevation adjusts automatically.",
-		"objective": "Dial range drum to ~1500m (aim at target)",
+		"text": "Use [Wheel] to dial the estimated range from INTEL. Refine it by observing shell impacts.",
+		"objective": "Dial an estimated range and find the target in the sight",
 		"hint": "Scroll wheel to dial drum. Press [Enter] or [N] to proceed.",
 		"target_tag": "range_drum"
 	},
@@ -535,3 +535,4 @@ class TutorialIndicatorCanvas extends Control:
 		var right_fin = arrow_tip + Vector2(9, -12)
 		draw_line(left_fin, arrow_tip, Color("ffd166"), 3.0, true)
 		draw_line(right_fin, arrow_tip, Color("ffd166"), 3.0, true)
+

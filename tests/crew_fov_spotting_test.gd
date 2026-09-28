@@ -84,7 +84,7 @@ func test_3_commander_rotates_toward_enemy_accumulates_detection() -> void:
 	v_enemy.position = Vector3(750, 0, 0) # Due East (bearing PI/2)
 	
 	# Rotate Commander toward enemy
-	v_player.obs_commander.world_azimuth = PI * 0.5
+	v_player.obs_commander.set_observe_sector(PI * 0.5, 45.0)
 	var in_fov = v_player.obs_commander.is_point_in_fov(v_enemy.position, v_player.position)
 	check(in_fov, "Enemy is inside Commander's FOV when rotated toward bearing 90°")
 	
@@ -100,7 +100,7 @@ func test_3_commander_rotates_toward_enemy_accumulates_detection() -> void:
 	check(prog2 > prog1, "Detection progress strictly increases with prolonged observation (%.3f -> %.3f)" % [prog1, prog2])
 	
 	# Accumulate to full confidence
-	for i in range(12):
+	for i in range(80):
 		sensor.evaluate(v_player, v_enemy, null, 0.75 + i * 0.25, false, null, 0.25)
 	var prog_final = v_player.obs_commander.detection_progress.get("Contact A", 0.0)
 	var stage = v_player.obs_commander.get_detection_stage("Contact A")
@@ -114,7 +114,7 @@ func test_4_building_blocks_los_no_detection() -> void:
 	v_enemy.name = "Contact A"
 	v_player.position = Vector3(-750, 0, 0)
 	v_enemy.position = Vector3(750, 0, 0)
-	v_player.obs_commander.world_azimuth = PI * 0.5
+	v_player.obs_commander.set_observe_sector(PI * 0.5, 45.0)
 	
 	# Simulate obstructed LOS
 	var sensor = SensorModelClass.new()
@@ -209,17 +209,20 @@ func test_8_gunner_wide_vs_magnified_fov_and_identification() -> void:
 	v_player.position = Vector3(0, 0, 0)
 	v_enemy.position = Vector3(1500, 0, 0)
 	v_player.obs_gunner.world_azimuth = PI * 0.5
+	v_player.obs_gunner.current_task = "TRACKING"
 	
 	var sensor = SensorModelClass.new()
 	# Rate with magnified
 	v_player.set_gunner_zoom(true)
 	v_player.obs_gunner.detection_progress.clear()
+	v_player.obs_gunner.evidence.clear()
 	sensor.evaluate(v_player, v_enemy, null, 1.0, false, null, 1.0)
 	var mag_gain = v_player.obs_gunner.detection_progress.get("Target", 0.0)
 	
 	# Rate with wide
 	v_player.set_gunner_zoom(false)
 	v_player.obs_gunner.detection_progress.clear()
+	v_player.obs_gunner.evidence.clear()
 	sensor.evaluate(v_player, v_enemy, null, 1.0, false, null, 1.0)
 	var wide_gain = v_player.obs_gunner.detection_progress.get("Target", 0.0)
 	
@@ -286,3 +289,4 @@ func test_10_start_game_clean_spawn_validation() -> void:
 	
 	game.queue_free()
 	await process_frame
+

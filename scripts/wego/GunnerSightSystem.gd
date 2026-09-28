@@ -137,14 +137,17 @@ func _update_camera_transform() -> void:
 	var forward = look_quat * Vector3(0, 0, -1)
 	sight_camera.look_at(sight_camera.global_position + forward, Vector3.UP)
 
+var active_station: bool = false
+
 func set_active(active: bool) -> void:
+	active_station = active
 	if sight_camera != null:
 		sight_camera.current = active
 		if active:
 			_update_camera_transform()
 
 func is_active() -> bool:
-	return sight_camera != null and sight_camera.current
+	return active_station
 
 # Adjust sight range manually in sensible mechanical increments (e.g. 50m / 25m)
 func adjust_sight_range(delta_m: float) -> void:
@@ -153,23 +156,16 @@ func adjust_sight_range(delta_m: float) -> void:
 	sight_range_m = clampf(roundf(new_range / step) * step, MIN_SIGHT_RANGE, MAX_SIGHT_RANGE)
 
 func get_optic_global_position() -> Vector3:
-	if sight_camera != null and sight_camera.is_inside_tree():
-		return sight_camera.global_position
-	if vehicle != null:
-		var turret_yaw = vehicle.model.turret_yaw if ("model" in vehicle and vehicle.model != null) else 0.0
-		var turret_rot = vehicle.rotation.y + turret_yaw
-		var quat = Quaternion.from_euler(Vector3(0.0, turret_rot, 0.0))
-		return vehicle.global_position + quat * Vector3(0.52, 2.80, -2.40)
-	return Vector3.ZERO
+	if vehicle == null: return Vector3.ZERO
+	var marker = vehicle.get_gunner_optic_marker() if vehicle.is_inside_tree() else null
+	if marker != null: return marker.global_position
+	var yaw: float = vehicle.rotation.y + vehicle.model.turret_yaw
+	return vehicle.position + Basis(Vector3.UP, yaw) * Vector3(0.52, 2.80, -2.40)
 
 func get_optic_forward_vector() -> Vector3:
-	if sight_camera != null and sight_camera.is_inside_tree():
-		return -sight_camera.global_transform.basis.z
 	var ammo = vehicle.get_active_ammo() if vehicle != null else null
 	var optic_pitch = current_bore_pitch - get_ballistic_elevation(sight_range_m, ammo)
-	var look_quat = Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0))
-	return look_quat * Vector3(0, 0, -1)
-
+	return Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0)) * Vector3(0, 0, -1)
 # Calculates the gun bore firing vector converging with optic line of sight at sight_range_m
 func get_converged_bore_vector(muzzle_pos: Vector3, ammo: AmmunitionData = null) -> Vector3:
 	var optic_pos = get_optic_global_position()
@@ -344,60 +340,31 @@ func update_step(delta: float, target_vehicle = null, world_3d: World3D = null) 
 	_update_acquisition(delta, target_vehicle, world_3d)
 
 func _update_acquisition(delta: float, target_vehicle, world_3d: World3D) -> void:
-	if target_vehicle == null or vehicle == null:
-		acquisition_state = AcquisitionState.NO_CONTACT
-		target_has_los = false
-		return
-		
-	var target_eye = target_vehicle.position + Vector3(0, 1.85, 0)
-	var sight_pos = sight_camera.global_position if (sight_camera != null and sight_camera.is_inside_tree()) else (vehicle.position + Vector3(0, 2.7, 0))
-	var offset = target_eye - sight_pos
-	var dist = offset.length()
-	var to_target_dir = offset.normalized()
-	
-	# Sight forward direction is the PHYSICAL optic orientation!
-	var sight_forward: Vector3
-	if sight_camera != null and sight_camera.is_inside_tree():
-		sight_forward = -sight_camera.global_transform.basis.z
-	else:
-		var ammo = vehicle.get_active_ammo() if vehicle != null else null
-		var optic_pitch = current_bore_pitch - get_ballistic_elevation(sight_range_m, ammo)
-		var look_quat = Quaternion.from_euler(Vector3(optic_pitch, current_bore_yaw, 0.0))
-		sight_forward = look_quat * Vector3(0, 0, -1)
-		
-	var angle_to_target = rad_to_deg(sight_forward.angle_to(to_target_dir))
-	
-	# Raycast check for true physical obstruction (terrain, buildings, berms)
 	target_has_los = false
-	if world_3d != null:
-		var space = world_3d.direct_space_state
-		if space != null:
-			var query = PhysicsRayQueryParameters3D.create(sight_pos, target_eye, 1) # Layer 1 obstacles
-			var hit = space.intersect_ray(query)
-			target_has_los = hit.is_empty()
-	else:
-		target_has_los = true
-		
-	var in_fov = angle_to_target <= (optic_fov_deg * 0.5)
-	var was_acquired = (acquisition_state in [AcquisitionState.TARGET_VISIBLE, AcquisitionState.ACQUIRED, AcquisitionState.TRACKING])
-	var is_slewing = absf(angle_difference(current_bore_yaw, commanded_yaw)) > 0.04
-	
-	if is_slewing:
+	if target_vehicle == null or vehicle == null: return
+	var station = vehicle.observers.get("Gunner")
+	if station == null or not station.can_observe(vehicle):
+		acquisition_state = AcquisitionState.NO_CONTACT
+		return
+	station.world_azimuth = -current_bore_yaw
+	station.elevation = current_bore_pitch - get_ballistic_elevation(sight_range_m, vehicle.get_active_ammo())
+	station.horizontal_fov_deg = optic_fov_deg
+	var sampled = preload("res://scripts/wego/CrewVisibility.gd").sample_vehicle(vehicle, station, target_vehicle, world_3d)
+	target_has_los = sampled.fraction > 0.0
+	var previous: bool = acquisition_state in [AcquisitionState.ACQUIRED, AcquisitionState.TRACKING]
+	var deliberate: bool = is_active() or station.current_task in ["DESIGNATING", "TRACKING"] or not (vehicle is Node and vehicle.is_inside_tree())
+	if absf(angle_difference(current_bore_yaw, commanded_yaw)) > 0.04:
 		acquisition_state = AcquisitionState.SLEWING
-		visual_contact_duration = maxf(0.0, visual_contact_duration - delta * 2.0)
-	elif in_fov and target_has_los:
-		visual_contact_duration += delta
-		if visual_contact_duration > 0.4:
-			acquisition_state = AcquisitionState.TRACKING if tracking_enabled else AcquisitionState.ACQUIRED
-		else:
-			acquisition_state = AcquisitionState.TARGET_VISIBLE
-			
-		if not was_acquired:
-			target_acquired.emit()
+		visual_contact_duration = 0.0
+	elif target_has_los and deliberate:
+		var distance: float = vehicle.position.distance_to(target_vehicle.position)
+		visual_contact_duration += delta * sampled.fraction * vehicle.crew_skill.get("gunner_tracking", 1.0)
+		var required: float = clampf(distance / 500.0, 0.4, 4.0)
+		acquisition_state = AcquisitionState.ACQUIRED if visual_contact_duration >= required else AcquisitionState.TARGET_VISIBLE
+		if acquisition_state == AcquisitionState.ACQUIRED and not previous: target_acquired.emit()
 	else:
-		visual_contact_duration = maxf(0.0, visual_contact_duration - delta * 2.0)
+		visual_contact_duration = maxf(0.0, visual_contact_duration - delta)
 		acquisition_state = AcquisitionState.SEARCHING
-
 # Check if gun is aligned within firing window
 func is_bore_aligned() -> bool:
 	var ballistic_elev = get_ballistic_elevation(sight_range_m, vehicle.get_active_ammo() if vehicle != null else null)
@@ -414,3 +381,5 @@ func can_fire_now() -> bool:
 		if not is_bore_aligned(): return false
 		if settling_state != SettlingState.STABLE: return false
 	return true
+
+

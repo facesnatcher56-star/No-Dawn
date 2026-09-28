@@ -78,6 +78,16 @@ func _draw() -> void:
 	var track = game.player_track
 	var confirmed: bool = game.contact_is_visible()
 	var cam = game.camera
+	if track != null and not track.has_contact() and not track.cues.is_empty():
+		var cue = track.cues.back()
+		var origin: Vector3 = game.player.position + Vector3.UP
+		var points = PackedVector2Array()
+		for angle in [cue.bearing_deg - cue.bearing_uncertainty, cue.bearing_deg, cue.bearing_deg + cue.bearing_uncertainty]:
+			var point = origin + Vector3(sin(deg_to_rad(angle)), 0, -cos(deg_to_rad(angle))) * 35.0
+			if not cam.is_position_behind(point): points.append(screen(point))
+		if points.size() == 3:
+			draw_polyline(points, AMBER, 2.0, true)
+			_tag(points[1], cue.label(-rad_to_deg(game.player.rotation.y)), AMBER)
 	
 	if track != null and track.has_contact() and not game.display_contact.is_empty():
 		# A. Predicted Movement Corridor (if target was moving when lost)
@@ -153,7 +163,7 @@ func _draw() -> void:
 		# C. Current Estimated Position Area (Restrained, localized, clamped footprint)
 		var center: Vector3 = game.contact_visual_position
 		if cam == null or not cam.is_position_behind(center):
-			var visual_r: float = 1.8 if confirmed else clampf(game.contact_visual_radius, 2.2, 5.5)
+			var visual_r: float = clampf(track.position_uncertainty, 2.2, 300.0)
 			var ring_scr = PackedVector2Array()
 			var all_pts_valid = true
 			for i in range(24):
@@ -182,32 +192,11 @@ func _draw() -> void:
 				draw_arc(middle, 11, 0, TAU, 32, tint, 1.5, true)
 				draw_string(font, middle + Vector2(-4, 5), "!" if confirmed else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, tint)
 				
-				var label_lines: Array[String] = []
-				label_lines.append("CONTACT A")
-				var contact_class = "Tank" if (track.identification_confidence >= 0.35 or track.has_visual_los or track.has_silhouette) else "Unknown"
-				label_lines.append(contact_class)
-				label_lines.append("~%s m" % [String.num(round(track.estimated_range / 50.0) * 50.0, 0)])
-				if track.estimated_speed_mps > 0.3:
-					var hdg_deg = int(track.estimated_heading_deg)
-					var arrow_str = "↑ N"
-					if hdg_deg >= 338 or hdg_deg < 23: arrow_str = "↑ N"
-					elif hdg_deg < 68: arrow_str = "↗ NE"
-					elif hdg_deg < 113: arrow_str = "→ E"
-					elif hdg_deg < 158: arrow_str = "↘ SE"
-					elif hdg_deg < 203: arrow_str = "↓ S"
-					elif hdg_deg < 248: arrow_str = "↙ SW"
-					elif hdg_deg < 293: arrow_str = "← W"
-					else: arrow_str = "↖ NW"
-					label_lines.append("Moving %s" % arrow_str)
-				else:
-					label_lines.append("Stationary")
-				
-				# In F3 debug mode only: append exact technical metrics
-				if game.debug_overlay_enabled:
-					var conf_pct = int(track.identification_confidence * 100)
-					var sol_str = game.player_firing_solution.solution_quality if game.player_firing_solution else "DEVELOPING"
-					label_lines.append("±%.0fm • CONF: %d%% · %s" % [track.range_uncertainty, conf_pct, sol_str])
-				
+				var label_lines: Array[String] = [track.classification.to_upper()]
+				if track.contact_stage >= 3:
+					label_lines.append("~%.0f m" % (roundf(track.estimated_range / 50.0) * 50.0))
+				if track.has_speed_estimate and track.has_orientation:
+					label_lines.append("%03d° • %.0f–%.0f km/h" % [int(track.estimated_heading_deg), maxf(0.0, track.estimated_speed_mps - track.speed_uncertainty) * 3.6, (track.estimated_speed_mps + track.speed_uncertainty) * 3.6])
 				_tag(middle + Vector2(0, -32), "\n".join(label_lines), tint)
 
 	# 3. Destination Route
@@ -280,6 +269,7 @@ func _draw() -> void:
 
 	# 5. Shot Tracers & Results
 	for event in game.shot_events:
+		if not event.known_origin: continue
 		var focused: bool = not game.playback.active.is_empty() and game.playback.active.shot_id == event.id
 		if game.shot_clock > event.until and not focused: continue
 		var tint = BLUE if event.shooter == "Your tank" else RED
@@ -465,3 +455,6 @@ func _draw_debug_crew_observers() -> void:
 			if score > 0.0:
 				var stage = obs.get_detection_stage(game.enemy.name)
 				_tag(scr_end + Vector2(0, 16), "%s: %d%% [%s]" % [lbl, int(score * 100), stage], ray_color)
+
+
+

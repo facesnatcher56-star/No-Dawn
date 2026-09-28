@@ -47,6 +47,9 @@ var target_contact_id: String = ""
 
 # Progressive detection progress per target: target_id -> float (0.0 to 1.0+)
 var detection_progress: Dictionary = {}
+var evidence: Dictionary = {}
+var visible_fraction: float = 0.0
+var debug_rays: Array = []
 
 enum SectorWidth {
 	NARROW = 18,
@@ -74,6 +77,7 @@ func set_observe_sector(bearing_rad: float, width_deg: float = 45.0) -> void:
 	horizontal_fov_deg = width_deg
 
 func track_contact_target(bearing_rad: float, contact_id: String) -> void:
+	is_sector_assigned = true
 	world_azimuth = bearing_rad
 	horizontal_fov_deg = 18.0
 	sector_width = 18
@@ -106,7 +110,7 @@ func _configure_role_defaults() -> void:
 			magnification = narrow_magnification
 			is_magnified = true
 			max_effective_range = 3200.0
-			current_task = "TRACKING"
+			current_task = "WATCHING"
 			
 		Role.LOADER:
 			mount_type = MountType.TURRET
@@ -152,7 +156,9 @@ func update_orientation(hull_yaw: float, turret_yaw: float, independent_bearing:
 			world_azimuth = (hull_yaw + turret_yaw) + azimuth_offset
 		MountType.INDEPENDENT:
 			# Commander can look independently or follow turret if no independent order
-			if independent_bearing != null:
+			if is_sector_assigned:
+				return
+			elif independent_bearing != null:
 				world_azimuth = independent_bearing
 			else:
 				world_azimuth = (hull_yaw + turret_yaw) + azimuth_offset
@@ -241,6 +247,15 @@ func accumulate_detection(target_id: String, base_rate: float, delta_time: float
 	var new_val = clampf(current + gain, 0.0, 1.0)
 	detection_progress[target_id] = new_val
 	return new_val
+
+func lose_evidence(target_id: String, dt: float) -> void:
+	var detail: Dictionary = evidence.get(target_id, {})
+	if detail.is_empty(): return
+	detail["lost"] = detail.get("lost", 0.0) + dt
+	if detail.lost > 0.4:
+		for property in ["bearing", "range", "classification", "motion"]:
+			detail[property] = maxf(0.0, detail.get(property, 0.0) - dt * 0.18)
+		detection_progress[target_id] = maxf(0.0, detection_progress.get(target_id, 0.0) - dt * 0.08)
 
 func get_detection_stage(target_id: String) -> String:
 	var score: float = detection_progress.get(target_id, 0.0)

@@ -19,6 +19,11 @@ var target_classification: String = "Unconfirmed contact"
 var is_direct_visual: bool = false
 var observer_name: String = ""
 var target_name: String = ""
+var contact_stage: int = 2 # SUSPECTED; legacy manually constructed reports remain conservative.
+var visible_fraction: float = 0.0
+var has_orientation: bool = false
+var has_speed_estimate: bool = false
+var observation_duration: float = 0.25
 
 func _init(
 	p_time: float = 0.0,

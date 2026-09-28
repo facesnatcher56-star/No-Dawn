@@ -23,6 +23,8 @@ const GunnerSightSystem = preload("res://scripts/wego/GunnerSightSystem.gd")
 const InteractiveTutorialClass = preload("res://scripts/wego/InteractiveTutorial.gd")
 
 var view_mode: String = "TACTICAL"
+var commander_camera: Camera3D
+var commander_hint: Label
 var gunner_overlay: GunnerReticleOverlay
 var gunner_sight_btn: Button
 var tactical_ui: Control
@@ -90,6 +92,7 @@ var player_track = null
 var enemy_track = null
 var player_firing_solution = null
 var debug_overlay_enabled: bool = false
+var knowledge = preload("res://scripts/wego/BattlefieldKnowledge.gd").new()
 var recent_gunfire_time: float = -999.0
 var recent_hit_time: float = -999.0
 var player_was_hit_this_pulse: bool = false
@@ -254,6 +257,7 @@ func _ready() -> void:
 	_update_camera(0.0)
 	_build_ui()
 	_set_map_running(false)
+	knowledge.install_map(get_node_or_null("MapBuilder"))
 	
 	# Initialize Interactive Tutorial
 	tutorial = InteractiveTutorialClass.new(self)
@@ -571,6 +575,7 @@ func _build_ui() -> void:
 			obs_cmd.set_observe_sector(obs_cmd.world_azimuth, float(w))
 			_event("COMMANDER: Observation sector set to %d° width." % w))
 	recon_row.add_child(sector_width_choice)
+	_button(left, "COMMANDER BINOCULARS [B]", _toggle_commander_view, 28)
 	
 	track_contact_button = _button(recon_row, "TRACK", _track_contact_order, 28)
 	track_contact_button.tooltip_text = "Focus Commander observation on suspected contact to refine estimates."
@@ -1123,15 +1128,8 @@ func _clear_orders() -> void:
 	order_notice = "Orders cleared. Tank will hold position."
 
 func _queue_scan() -> void:
-	if not _can_edit_orders(): return
-	if not display_contact.is_empty():
-		_aim_at(display_contact.position)
-	else:
-		var forward_aim = player.position - player.turret.global_basis.z * 50.0
-		_aim_at(forward_aim)
-	fields.engine.button_pressed = false
-	fields.observe.button_pressed = true
-	fields.light.button_pressed = true
+	_start_observe_sector_mode()
+
 func _start_observe_sector_mode() -> void:
 	if not _can_edit_orders(): return
 	_set_mode("observe_sector")
@@ -1248,6 +1246,38 @@ func _set_btn_action(btn: Button, callback: Callable) -> void:
 		btn.pressed.disconnect(c.callable)
 	btn.pressed.connect(callback)
 
+func _toggle_commander_view() -> void:
+	if view_mode == "COMMANDER":
+		_exit_gunner_view()
+		if commander_hint != null: commander_hint.hide()
+		return
+	if view_mode == "GUNNER": _exit_gunner_view()
+	view_mode = "COMMANDER"
+	if commander_camera == null:
+		commander_camera = Camera3D.new()
+		commander_camera.near = 0.1
+		commander_camera.far = 4500.0
+		add_child(commander_camera)
+		commander_hint = Label.new()
+		commander_hint.text = "COMMANDER • Mouse: look • Click: focus 18° • Space: execute • B / Esc: return"
+		commander_hint.position = Vector2(30, 55)
+		tactical_ui.get_parent().add_child(commander_hint)
+	commander_hint.show()
+	_update_commander_camera()
+	commander_camera.make_current()
+	battlefield_overlay.hide()
+	world_graphics.hide()
+	tactical_ui.hide()
+	ghost_tank.hide()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+func _update_commander_camera() -> void:
+	if commander_camera == null: return
+	var station = player.obs_commander
+	commander_camera.position = preload("res://scripts/wego/CrewVisibility.gd").eye(player, station)
+	commander_camera.rotation = Vector3(station.elevation, -station.world_azimuth, 0)
+	commander_camera.fov = 24.0 if station.horizontal_fov_deg <= 22.0 else 45.0
+
 func _toggle_gunner_view() -> void:
 	if view_mode == "TACTICAL":
 		_enter_gunner_view()
@@ -1256,6 +1286,7 @@ func _toggle_gunner_view() -> void:
 
 func _enter_gunner_view() -> void:
 	if not is_instance_valid(player) or player.gunner_sight == null: return
+	if commander_hint != null: commander_hint.hide()
 	view_mode = "GUNNER"
 	player.gunner_sight.set_active(true)
 	camera.current = false
@@ -1480,13 +1511,13 @@ func _plan_ai() -> void:
 		"extinguish": enemy.model.burning
 	}
 	
-	if enemy_track != null:
+	if enemy_track != null and enemy_track.has_contact():
 		var offset = enemy_track.estimated_position - enemy.position
 		ai_plan["range"] = maxf(10.0, offset.length())
 		ai_plan["bearing"] = fposmod(rad_to_deg(atan2(offset.x, -offset.z)), 360.0)
 		
 		# If AI has confirmed visual or tight track, it calculates moving lead and fires
-		if enemy_track.has_visual_los or enemy_track.range_uncertainty < 35.0:
+		if enemy_track.contact_stage >= ContactTrack.Stage.LOCATED and (enemy_track.has_visual_los or enemy_track.range_uncertainty < 35.0):
 			var ai_sol = FiringSolution.calculate(enemy, enemy_track, rng)
 			ai_plan["aim_point"] = ai_sol.predicted_target_position
 			ai_plan["fire"] = turn > 1 and enemy.model.can_fire()
@@ -1494,6 +1525,13 @@ func _plan_ai() -> void:
 		# AI patrol maneuvers when out of contact
 		if turn % 3 == 0 and not enemy_track.has_visual_los:
 			ai_plan["move"] = -8.0
+	var ai_commander = enemy.observers.Commander
+	if enemy_track.has_contact():
+		ai_commander.set_observe_sector(deg_to_rad(enemy_track.estimated_bearing_deg), 18.0)
+	elif not enemy_track.cues.is_empty():
+		ai_commander.set_observe_sector(deg_to_rad(enemy_track.cues.back().bearing_deg), 45.0)
+	else:
+		ai_commander.set_observe_sector(-enemy.rotation.y + sin(float(turn) * 0.7) * 0.7, 90.0)
 	enemy.commit(ai_plan)
 
 func _physics_process(delta: float) -> void:
@@ -1592,6 +1630,7 @@ func _finish_execution() -> void:
 	if phase != "EXECUTION" or playback.busy() or not shells.is_empty(): return
 	timeline.complete_pulse()
 	_set_map_running(false)
+	knowledge.install_map(get_node_or_null("MapBuilder"))
 	phase = "ASSESSMENT"
 	turn += 1
 	player.lamp.visible = false
@@ -1837,7 +1876,7 @@ func _fire(tank) -> void:
 	playback.shot_fired()
 	var tracer = Vehicle.box(self, Vector3(0.08, 0.08, 1.5), Transform3D(Basis.IDENTITY, origin), Color("ffdb87"))
 	shells.append({"id": shot_serial, "origin": origin, "position": origin, "velocity": dir * muzzle_speed, "shooter": tank, "distance": 0.0, "tracer": tracer, "ammo": ammo})
-	CombatEffects.spawn_muzzle_blast(self, origin, dir)
+	if tank == player or knowledge.is_live(origin, [player], get_world_3d()): CombatEffects.spawn_muzzle_blast(self, origin, dir)
 	cam_shake = maxf(cam_shake, 0.85)
 	var audio_mgr = get_node_or_null("/root/AudioManager")
 	if audio_mgr != null and audio_mgr.has_method("play_sound_3d"):
@@ -1847,6 +1886,7 @@ func _fire(tank) -> void:
 	var other_tank = enemy if tank == player else player
 	var other_track = player_track if tank == enemy else enemy_track
 	var acoustic_res = sensor_model.evaluate(other_tank, tank, get_world_3d(), sim_time, true)
+	other_track.add_cue(acoustic_res.get("cue"))
 	var acoustic_obs = acoustic_res.get("acoustic_observation", null)
 	if acoustic_obs != null:
 		other_track.integrate_observation(acoustic_obs, sim_time)
@@ -1855,7 +1895,7 @@ func _fire(tank) -> void:
 			_event("ACOUSTIC: Gun report detected on bearing %03d°!" % int(acoustic_obs.bearing_deg))
 
 	var known_origin: bool = tank == player or contact_is_visible()
-	var display_origin: Vector3 = origin if known_origin else display_contact.get("position", origin)
+	var display_origin: Vector3 = origin if known_origin else player.position
 	shot_events.append({"id": shot_serial, "turn_time": turn_start_time, "shooter": tank.name, "from": display_origin, "to": display_origin, "known_origin": known_origin, "fired": shot_clock, "until": shot_clock + 4, "result": "IN FLIGHT", "target": "", "hit": false})
 	_event("Shot #%02d: %s FIRED (%s)." % [shot_serial, "YOU" if tank == player else "CONTACT A", ammo.name])
 
@@ -1907,7 +1947,7 @@ func _step_shells(delta: float) -> void:
 			selected_record.add_item("#%02d / %s → %s / %s" % [shell.id, "YOU" if shell.shooter == player else "ENEMY", "YOU" if target == player else "ENEMY", record.result])
 			playback.enqueue(record)
 			var impact_world_pos = start + dir * nearest
-			CombatEffects.spawn_impact_fx(self, impact_world_pos, -dir, record.result)
+			if knowledge.is_live(impact_world_pos, [player], get_world_3d()): CombatEffects.spawn_impact_fx(self, impact_world_pos, -dir, record.result)
 			cam_shake = maxf(cam_shake, 0.5)
 			_set_shot_result(shell.id, impact_world_pos, record.result, target.name, true)
 			_event(_shot_title(record) + ": " + record.result + ".")
@@ -1916,7 +1956,7 @@ func _step_shells(delta: float) -> void:
 				print("\n" + record.debug_report + "\n")
 			remove = true
 		elif obstacle_distance <= segment:
-			CombatEffects.spawn_impact_fx(self, obstruction.position, obstruction.get("normal", Vector3.UP), "GROUND_MISS")
+			if knowledge.is_live(obstruction.position, [player], get_world_3d()): CombatEffects.spawn_impact_fx(self, obstruction.position, obstruction.get("normal", Vector3.UP), "GROUND_MISS")
 			_set_shot_result(shell.id, obstruction.position, "MISS • COVER / GROUND", "Cover / ground", false)
 			_event("Shot #%02d: %s → COVER / GROUND. No tank hit." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
 			
@@ -1930,7 +1970,7 @@ func _step_shells(delta: float) -> void:
 					_event("OBSERVED SPLASH: Shell fell %s. Range corrected!" % splash_rel)
 			remove = true
 		elif finish.y <= 0.0:
-			CombatEffects.spawn_impact_fx(self, Vector3(finish.x, 0.0, finish.z), Vector3.UP, "GROUND_MISS")
+			if knowledge.is_live(finish, [player], get_world_3d()): CombatEffects.spawn_impact_fx(self, Vector3(finish.x, 0.0, finish.z), Vector3.UP, "GROUND_MISS")
 			_set_shot_result(shell.id, finish, "MISS • GROUND SPLASH", "Ground", false)
 			_event("Shot #%02d: %s → GROUND SPLASH." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
 			if shell.shooter == player and player_track != null and contact_is_visible():
@@ -1945,9 +1985,10 @@ func _step_shells(delta: float) -> void:
 		shell.position = finish
 		shell.velocity += Vector3.DOWN * 9.81 * delta
 		shell.tracer.position = finish
+		shell.tracer.visible = knowledge.is_live(finish, [player], get_world_3d())
 		if not remove:
 			for event in shot_events:
-				if event.id == shell.id: event.to = finish
+				if event.id == shell.id and shell.tracer.visible: event.to = finish
 		if shell.distance > 3500.0:
 			_set_shot_result(shell.id, finish, "MISS • OUT OF RANGE", "No hit", false)
 			_event("Shot #%02d: %s missed; shell left the engagement." % [shell.id, "YOU" if shell.shooter == player else "CONTACT A"])
@@ -1959,7 +2000,7 @@ func _step_shells(delta: float) -> void:
 func _set_shot_result(id: int, point: Vector3, result: String, target: String, hit: bool) -> void:
 	for event in shot_events:
 		if event.id == id:
-			event.to = point
+			if knowledge.is_live(point + Vector3.UP, [player], get_world_3d()): event.to = point
 			event.result = result
 			event.target = target
 			event.hit = hit
@@ -1968,39 +2009,19 @@ func _set_shot_result(id: int, point: Vector3, result: String, target: String, h
 
 func _evaluate_sensors(dt: float) -> void:
 	if not is_instance_valid(player) or not is_instance_valid(enemy): return
-	var world_3d = get_world_3d()
-	
-	# 1. Player senses Enemy
-	var p_res = sensor_model.evaluate(player, enemy, world_3d, sim_time)
-	var p_vis = p_res.get("visual_observation", null)
-	var p_ac = p_res.get("acoustic_observation", null)
-	if p_vis != null:
-		var was_visible = player_track.has_visual_los
-		player_track.integrate_observation(p_vis, sim_time)
-		if not was_visible:
-			_event("VISUAL CONTACT: Target acquired!")
-		_publish_contact()
-	elif p_ac != null:
-		player_track.integrate_observation(p_ac, sim_time)
-		if p_ac.source == "Gun report":
-			_publish_contact()
-	else:
-		player_track.predict_motion(dt, sim_time)
-		
-	# 2. Enemy senses Player (Identical sensor rules! No cheating!)
-	var e_res = sensor_model.evaluate(enemy, player, world_3d, sim_time)
-	var e_vis = e_res.get("visual_observation", null)
-	var e_ac = e_res.get("acoustic_observation", null)
-	if e_vis != null:
-		enemy_track.integrate_observation(e_vis, sim_time)
-	elif e_ac != null:
-		enemy_track.integrate_observation(e_ac, sim_time)
-	else:
-		enemy_track.predict_motion(dt, sim_time)
-		
-	# Update firing solution
+	var old_stage: int = player_track.contact_stage
+	var old_cue_count: int = player_track.cues.size()
+	for pair in [[player, enemy, player_track], [enemy, player, enemy_track]]:
+		var result = sensor_model.evaluate(pair[0], pair[1], get_world_3d(), sim_time, false, null, dt)
+		pair[2].sensing_update(result, dt, sim_time, pair[0].crew_skill)
+		pair[2].gunner_acquired = pair[0].gunner_sight.acquisition_state in [GunnerSightSystem.AcquisitionState.ACQUIRED, GunnerSightSystem.AcquisitionState.TRACKING] and result.gunner_can_acquire
+	if player_track.contact_stage != old_stage and player_track.has_contact():
+		_callout("Commander", player_track.classification + ".")
+	elif player_track.cues.size() > old_cue_count:
+		_callout(player_track.cues.back().source, player_track.cues.back().label(-rad_to_deg(player.rotation.y)))
+	_publish_contact()
 	player_firing_solution = FiringSolution.calculate(player, player_track, rng)
-
+	knowledge.update([player], get_world_3d(), sim_time)
 func _publish_contact() -> void:
 	if player_track != null and player_track.has_contact():
 		display_contact = player_track.to_dict()
@@ -2008,7 +2029,7 @@ func _publish_contact() -> void:
 		display_contact.clear()
 
 func contact_is_visible() -> bool:
-	return player_track != null and player_track.has_visual_los and (player_track.time_since_visual < 1.0)
+	return player_track != null and player_track.has_visual_los and player_track.contact_stage >= ContactTrack.Stage.CLASSIFIED and (player_track.time_since_visual < 0.35)
 
 func _fire_status() -> String:
 	if not player.model.can_fire(): return "gunner, breech or ammunition unavailable — check CREW"
@@ -2152,12 +2173,14 @@ func _process(delta: float) -> void:
 	_update_contextual_bar()
 
 	var visible_contact = contact_is_visible()
+	if view_mode == "COMMANDER": _update_commander_camera()
 	if view_mode == "GUNNER":
 		enemy.visible = player.gunner_sight != null and player.gunner_sight.target_has_los
 		if ghost_tank != null: ghost_tank.visible = false
 		if gunner_overlay != null: gunner_overlay.queue_redraw()
 	else:
 		enemy.visible = visible_contact
+		if view_mode == "COMMANDER": enemy.visible = preload("res://scripts/wego/CrewVisibility.gd").sample_vehicle(player, player.obs_commander, enemy, get_world_3d()).fraction > 0.0
 
 	if player_track != null and player_track.has_contact() and not display_contact.is_empty():
 		var age = sim_time - player_track.last_observation_time
@@ -2168,20 +2191,12 @@ func _process(delta: float) -> void:
 		var distance = player_track.estimated_range
 		var state_str = "SIGHTED" if visible_contact else ("LAST SEEN" if player_track.has_silhouette else "UNCONFIRMED")
 		var sol_quality = player_firing_solution.solution_quality if player_firing_solution else "NO SOLUTION"
-		contact_label.text = "CONTACT A • %s\nEst. Range: %.0f m (±%.0f m)\nHeading: %03d° (±%d°) • Spd: %.1f m/s\nSolution: %s (Age: %.1fs)" % [
-			state_str,
-			distance,
-			player_track.range_uncertainty,
-			int(player_track.estimated_heading_deg),
-			int(player_track.heading_uncertainty),
-			player_track.estimated_speed_mps,
-			sol_quality,
-			age
-		]
+		contact_label.text = player_track.intel_text()
 	else:
 		contact_visual_radius = 0.0
 		if contact_label != null:
-			contact_label.text = "NO CONTACTS\n========================================\nNo enemy contacts currently detected.\n\n• Use [SCAN FOR ENEMY] to sweep searchlight\n• Advance along avenue to acquire visual LOS\n• Listen for enemy engine or weapon reports"
+			contact_label.text = "NO CONTACTS\nEnemy armor reported beyond the refinery.\nChoose OBSERVE SECTOR to investigate.\n[B] Commander binoculars. [G] Gunner sight."
+			if not player_track.cues.is_empty(): contact_label.text = player_track.cues.back().label(-rad_to_deg(player.rotation.y))
 	
 	# Update in-world 3D Ghost Tank
 	if ghost_tank != null:
@@ -2200,7 +2215,7 @@ func _process(delta: float) -> void:
 		for a in action_queue.actions:
 			if a.kind == "move": q_pts.append(a.point)
 		world_graphics.update_route(player.position, travel_target, q_pts, phase != "EXECUTION")
-		world_graphics.update_observation(player.position, player.rotation.y + player.model.turret_yaw, phase != "EXECUTION")
+		world_graphics.update_observation(player.position, player.obs_commander.world_azimuth, phase != "EXECUTION" and player.obs_commander.is_sector_assigned, player.obs_commander.horizontal_fov_deg)
 		if not visible_contact and player_track != null and player_track.has_silhouette and player_track.estimated_speed_mps > 0.4:
 			world_graphics.update_predicted_corridor(player_track.get_predicted_corridor(5.5), true)
 		else:
@@ -2233,6 +2248,26 @@ func _log(message: String) -> void:
 	if event_log: event_log.text = "\n".join(log_lines)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if view_mode == "COMMANDER":
+		if event is InputEventMouseMotion and _can_edit_orders():
+			player.obs_commander.set_observe_sector(player.obs_commander.world_azimuth + event.relative.x * 0.002, player.obs_commander.horizontal_fov_deg)
+			player.obs_commander.elevation = clampf(player.obs_commander.elevation - event.relative.y * 0.002, -0.5, 0.5)
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _can_edit_orders():
+			player.obs_commander.set_observe_sector(player.obs_commander.world_azimuth, 18.0)
+			var cue = preload("res://scripts/wego/ReconCue.gd").new()
+			cue.source = "Player"
+			cue.category = "REPORTED_CONTACT"
+			cue.timestamp = sim_time
+			cue.bearing_deg = rad_to_deg(player.obs_commander.world_azimuth)
+			cue.observer_position = player.position
+			player_track.add_cue(cue)
+		elif event is InputEventKey and event.pressed:
+			if event.keycode in [KEY_B, KEY_ESCAPE]: _toggle_commander_view()
+			elif event.keycode == KEY_SPACE: _on_primary_exec_pressed()
+		return
+	if event is InputEventKey and event.pressed and event.keycode == KEY_B:
+		_toggle_commander_view()
+		return
 	if view_mode == "GUNNER":
 		if event is InputEventMouseMotion:
 			if is_instance_valid(player) and player.gunner_sight != null:
@@ -2411,4 +2446,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				right_click_dragged = true
 			cam_yaw += delta_mouse.x * 0.006
 			cam_pitch = clampf(cam_pitch - delta_mouse.y * 0.006, deg_to_rad(-86.0), deg_to_rad(-10.0))
+
+
 
